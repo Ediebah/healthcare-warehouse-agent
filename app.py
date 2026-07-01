@@ -101,6 +101,8 @@ CSS = """
 .cite{ font-family:var(--font-mono); font-size:.72rem; color:var(--faint); margin:.5rem 0 0;
   display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; }
 .cite .pill{ font-size:.68rem; }
+.trace{ font-family:var(--font-mono); font-size:.72rem; color:var(--faint); margin-top:1.4rem;
+  padding-top:.8rem; border-top:1px solid var(--border-soft); }
 
 /* buttons — chips + primary CTA */
 .stButton > button{ font-family:var(--font-mono); font-size:.78rem; font-weight:400;
@@ -254,6 +256,13 @@ if go and question:
 
     eyebrow("Interpretation & recommendation")
     st.markdown(result.interpretation)
+
+    if result.trace:
+        t = result.trace
+        toks = t.get("prompt_tokens", 0) + t.get("completion_tokens", 0)
+        st.markdown(f"<div class='trace'>⏱ {t.get('latency_ms', 0)} ms · {t.get('calls', 0)} LLM calls · "
+                    f"{toks:,} tokens · est. ${t.get('est_cost_usd', 0):.4f}</div>",
+                    unsafe_allow_html=True)
 
 # ───────────────────────────── footer ─────────────────────────────
 st.markdown("""

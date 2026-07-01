@@ -24,6 +24,18 @@ from .warehouse import run_query, QueryError
 
 MAX_SQL_TRIES = 4
 
+# Defense-in-depth: block obvious prompt-injection before spending any tokens. (The SQL layer is
+# already read-only + validated, so the blast radius is small; this stops instruction-override too.)
+_INJECTION = re.compile(
+    r"(ignore (all |the )?(previous|above|prior)|disregard (the |your |all )?(previous|instruction|rule)|"
+    r"system prompt|you are now|reveal (your|the) (instructions|prompt|system)|"
+    r"print (your |the )?(instructions|prompt|system)|jailbreak|override (the |your )?(rules|instructions)|"
+    r"forget (your|the|all))", re.I)
+
+
+def _looks_like_injection(q: str) -> bool:
+    return bool(_INJECTION.search(q or ""))
+
 _SYSTEM = (
     "You are a meticulous healthcare data analyst working over a dbt-modeled DuckDB warehouse "
     "(schema `main`). You write DuckDB SQL. Rules: (1) use ONLY tables and columns that appear in "
@@ -60,6 +72,7 @@ class AgentResult:
     findings: list[guardrails.Finding] = field(default_factory=list)
     verification: dict | None = None                          # {answers_question, confidence, issues}
     interpretation: str = ""
+    trace: dict | None = None                                 # {calls, tokens, latency_ms, est_cost_usd}
     error: str | None = None
 
     @property
@@ -168,6 +181,11 @@ def _degenerate(df) -> bool:
 
 def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
     result = AgentResult(question=question)
+    llm.reset_trace()
+    if _looks_like_injection(question):
+        result.error = ("This request looks like an attempt to override the agent's instructions and "
+                        "was blocked. Please ask a data question about the healthcare warehouse.")
+        return result
     try:
         retrieved = retrieval.retrieve(question)
         context = retrieval.render_context(retrieved)
@@ -221,6 +239,8 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
         result.interpretation = _interpret(question, sql, df, result.findings)
     except llm.LLMError as e:
         result.error = str(e)
+    finally:
+        result.trace = llm.trace_summary()
     return result
 
 

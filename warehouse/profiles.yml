@@ -16,3 +16,17 @@ healthcare:
       path: ../data/healthcare.duckdb
       schema: main          # models build here; raw source data lives in schema `raw`
       threads: 4
+
+    # Same models on Snowflake (the truthful "Snowflake" claim): `pip install dbt-snowflake`,
+    # set the env vars below, load the raw CSVs into a HEALTHCARE.RAW schema, then
+    # `dbt build --target prod`. Credentials come from the environment — nothing secret is committed.
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', '') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'HEALTHCARE') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'MAIN') }}"
+      threads: 4

@@ -9,8 +9,11 @@ On any validation or execution error we raise QueryError with a clear message â€
 feeds that message back to the model to self-heal.
 """
 from __future__ import annotations
+import datetime as _dt
+import json
 import os
 import re
+import time
 from pathlib import Path
 
 import duckdb
@@ -30,6 +33,19 @@ def _resolve_db_path() -> Path:
 
 DB_PATH = _resolve_db_path()
 MAX_ROWS = 1000
+_AUDIT_LOG = Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"
+
+
+def _audit(sql: str, rows: int, ms: float) -> None:
+    """Append every executed query to a read-only audit trail (logs/ is git-ignored)."""
+    try:
+        _AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+               "rows": rows, "ms": round(ms, 1), "sql": sql}
+        with _AUDIT_LOG.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
 
 # Whole-word write/DDL keywords that must never appear in an analytics query.
 _FORBIDDEN = re.compile(
@@ -71,16 +87,19 @@ def run_query(sql: str, max_rows: int = MAX_ROWS) -> pd.DataFrame:
     if not DB_PATH.exists():
         raise QueryError(f"Warehouse not found at {DB_PATH}. Run the loader + `dbt build` first.")
     wrapped = f"select * from (\n{cleaned}\n) as _agent_q limit {max_rows}"
+    t0 = time.perf_counter()
     try:
         con = duckdb.connect(str(DB_PATH), read_only=True)
         try:
-            return con.execute(wrapped).df()
+            df = con.execute(wrapped).df()
         finally:
             con.close()
     except QueryError:
         raise
     except Exception as e:  # noqa: BLE001 â€” surface the DB message to the self-heal loop
         raise QueryError(str(e)) from e
+    _audit(cleaned, len(df), (time.perf_counter() - t0) * 1000)
+    return df
 
 
 if __name__ == "__main__":
