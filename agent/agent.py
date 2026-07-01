@@ -33,7 +33,10 @@ _SYSTEM = (
     "(6) Only add GROUP BY when the question explicitly asks for a per-category breakdown "
     "(e.g. 'by age group', 'by condition', 'for each class'). A single overall figure — including "
     "phrasings like 'average cost per encounter/patient' — means one aggregate row over all units, "
-    "not a grouped result."
+    "not a grouped result. "
+    "(7) When you compute a rate/proportion/prevalence, also SELECT its numerator (the count) and "
+    "denominator (the group size), not only the percentage — the downstream statistical guardrail "
+    "needs them to compute confidence intervals and group contrasts."
 )
 
 
