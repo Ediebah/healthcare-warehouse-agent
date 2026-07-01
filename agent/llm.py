@@ -23,9 +23,14 @@ class LLMError(Exception):
 def _get_client():
     global _client
     if _client is None:
+        # Re-read agent/.env at call time in case the key was added after this process started
+        # (avoids a stale Streamlit process that imported before the key existed).
+        if not os.getenv("OPENAI_API_KEY"):
+            load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
         if not os.getenv("OPENAI_API_KEY"):
             raise LLMError(
-                "OPENAI_API_KEY is not set. Copy agent/.env.example to agent/.env and add your key."
+                "OPENAI_API_KEY is not set. Copy agent/.env.example to agent/.env and add your key "
+                "(then restart the app if it was already running)."
             )
         from openai import OpenAI
         _client = OpenAI()
