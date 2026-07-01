@@ -1,0 +1,9 @@
+# Python 3.12 recommended (dbt's ecosystem is best-tested there).
+# Setup:
+#   uv venv --python 3.12
+#   uv pip install -r requirements.txt
+#
+# Pinned to what this project was built and tested against.
+dbt-core==1.11.11
+dbt-duckdb==1.10.1
+duckdb==1.5.4

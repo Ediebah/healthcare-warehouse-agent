@@ -1,0 +1,18 @@
+# Connection config for the `healthcare` profile.
+#
+# Normally profiles.yml lives in ~/.dbt/ and is NOT committed (it holds warehouse
+# passwords). We keep it in the repo because DuckDB is just a local file — no secrets —
+# and it makes the project clone-and-run. We point dbt at it with --profiles-dir.
+#
+# The `path` is RELATIVE TO THE PROCESS WORKING DIRECTORY. We always run dbt from inside
+# warehouse/, so ../data/healthcare.duckdb resolves to the repo's data/ folder — the same
+# file scripts/load_raw.py writes to.
+
+healthcare:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ../data/healthcare.duckdb
+      schema: main          # models build here; raw source data lives in schema `raw`
+      threads: 4

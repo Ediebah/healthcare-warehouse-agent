@@ -1,0 +1,145 @@
+version: 2
+
+# Docs + tests for the star-schema core. Dimensions get not_null+unique on their PK;
+# facts get not_null+unique on their (surrogate or natural) PK plus `relationships` tests
+# from each foreign key to the dimension it points at — this is what enforces the star.
+
+models:
+  # ---------------- dimensions ----------------
+  - name: dim_patient
+    description: "Patient dimension. Grain: one row per patient. Adds derived age + clinical age bands."
+    columns:
+      - name: patient_id
+        description: "Primary key (UUID)."
+        data_tests: [not_null, unique]
+      - name: age
+        description: "Age in years at death (if deceased) or as of the current date."
+      - name: age_group
+        description: "Clinical age band."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['0-17', '18-39', '40-64', '65-74', '75+']
+      - name: gender
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['M', 'F']
+
+  - name: dim_condition
+    description: "Condition-concept dimension. Grain: one row per SNOMED-CT condition_code."
+    columns:
+      - name: condition_code
+        description: "Primary key (SNOMED-CT code)."
+        data_tests: [not_null, unique]
+
+  - name: dim_medication
+    description: "Medication-concept dimension. Grain: one row per RxNorm medication_code."
+    columns:
+      - name: medication_code
+        description: "Primary key (RxNorm code)."
+        data_tests: [not_null, unique]
+
+  - name: dim_organization
+    description: "Organization dimension. Grain: one row per organization_id."
+    columns:
+      - name: organization_id
+        description: "Primary key (UUID)."
+        data_tests: [not_null, unique]
+
+  - name: dim_provider
+    description: "Provider dimension with denormalized organization name. Grain: one row per provider_id."
+    columns:
+      - name: provider_id
+        description: "Primary key (UUID)."
+        data_tests: [not_null, unique]
+
+  - name: dim_payer
+    description: "Payer dimension. Grain: one row per payer_id."
+    columns:
+      - name: payer_id
+        description: "Primary key (UUID)."
+        data_tests: [not_null, unique]
+
+  # ---------------- facts ----------------
+  - name: fct_encounters
+    description: "Encounter fact. Grain: one row per encounter. Measures: costs, out-of-pocket, duration."
+    columns:
+      - name: encounter_id
+        description: "Primary key (natural)."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }
+      - name: organization_id
+        data_tests:
+          - relationships:
+              arguments: { to: ref('dim_organization'), field: organization_id }
+      - name: provider_id
+        data_tests:
+          - relationships:
+              arguments: { to: ref('dim_provider'), field: provider_id }
+      - name: payer_id
+        data_tests:
+          - relationships:
+              arguments: { to: ref('dim_payer'), field: payer_id }
+
+  - name: fct_conditions
+    description: "Condition-episode fact. Grain: one row per patient-condition episode."
+    columns:
+      - name: condition_episode_id
+        description: "Surrogate primary key."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }
+      - name: condition_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_condition'), field: condition_code }
+
+  - name: fct_medications
+    description: "Medication-order fact. Grain: one row per medication order."
+    columns:
+      - name: medication_order_id
+        description: "Surrogate primary key."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }
+      - name: medication_code
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_medication'), field: medication_code }
+
+  - name: fct_procedures
+    description: "Procedure fact. Grain: one row per procedure performed."
+    columns:
+      - name: procedure_event_id
+        description: "Surrogate primary key."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }
+
+  - name: fct_observations
+    description: "Observation fact (labs/vitals/survey). Grain: one row per measurement."
+    columns:
+      - name: observation_id
+        description: "Surrogate primary key."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }

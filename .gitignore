@@ -1,0 +1,29 @@
+# --- Python env ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Synthea (regenerable from the seeded command in the README) ---
+synthea/synthea-with-dependencies.jar
+synthea/output/
+
+# --- DuckDB warehouse file (rebuilt by the loader + `dbt run`) ---
+data/*.duckdb
+data/*.duckdb.wal
+
+# --- dbt build artifacts ---
+warehouse/target/
+warehouse/dbt_packages/
+warehouse/logs/
+logs/
+# dbt per-user anonymous id — machine-local, not project content
+warehouse/.user.yml
+
+# --- local agent / session tooling (not part of the portfolio) ---
+.claude/
+.remember/
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+.idea/

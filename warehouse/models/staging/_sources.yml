@@ -1,0 +1,35 @@
+version: 2
+
+# Sources = the raw tables that already exist in the warehouse (loaded by
+# scripts/load_raw.py). Declaring them here lets models say
+# `{{ source('synthea', 'patients') }}` instead of hard-coding raw.patients, so:
+#   * dbt tracks lineage from raw CSV → staging → marts (visible in the docs DAG), and
+#   * we can attach freshness checks / tests to the raw layer.
+sources:
+  - name: synthea
+    description: >
+      Raw Synthea-generated synthetic EHR tables, loaded verbatim from CSV into DuckDB
+      (every column VARCHAR — a faithful copy; casting happens in staging).
+      Generated reproducibly with seed 12345, 1,000 living patients (Massachusetts).
+    schema: raw
+    tables:
+      - name: patients
+        description: "One row per synthetic patient — demographics, birth/death dates, geography, lifetime cost totals. Natural key: Id."
+      - name: encounters
+        description: "One row per healthcare encounter (visit). Costs, payer, encounter class, reason. Natural key: Id."
+      - name: conditions
+        description: "Patient conditions/diagnoses with onset (START) and resolution (STOP). SNOMED-coded. No natural PK."
+      - name: medications
+        description: "Medication orders: start/stop, base + total cost, dispenses, reason. RxNorm-coded. No natural PK."
+      - name: observations
+        description: "Labs, vitals, and survey results in tall format — one row per measurement (VALUE, UNITS, TYPE). LOINC-coded."
+      - name: procedures
+        description: "Procedures performed during encounters, with base cost and reason. SNOMED-coded. No natural PK."
+      - name: claims
+        description: "Insurance claim headers — one row per claim, linking patient/provider/insurer with up to 8 diagnosis codes. Natural key: Id."
+      - name: organizations
+        description: "Healthcare organizations (hospitals/clinics). Natural key: Id."
+      - name: providers
+        description: "Individual clinicians, each linked to an organization. Natural key: Id."
+      - name: payers
+        description: "Insurance payers. Natural key: Id."

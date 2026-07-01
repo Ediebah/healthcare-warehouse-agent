@@ -1,0 +1,56 @@
+version: 2
+
+# Docs + tests for the analytics marts (question-shaped models built on the star schema).
+
+models:
+  - name: mart_readmissions
+    description: >
+      30-day inpatient readmission flags. One row per index inpatient encounter; is_30d_readmission
+      is true when the same patient is admitted again within 0-30 days of discharge.
+    columns:
+      - name: index_encounter_id
+        description: "PK — the index inpatient encounter."
+        data_tests: [not_null, unique]
+      - name: patient_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: { to: ref('dim_patient'), field: patient_id }
+      - name: is_30d_readmission
+        description: "True if a subsequent inpatient admission occurred within 30 days of discharge."
+        data_tests: [not_null]
+
+  - name: mart_cost_by_condition
+    description: >
+      Cost of the diagnosing encounter aggregated by condition (NOT lifetime cost of care).
+      One row per condition_code.
+    columns:
+      - name: condition_code
+        description: "PK — SNOMED-CT condition code."
+        data_tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments: { to: ref('dim_condition'), field: condition_code }
+      - name: num_patients
+        description: "Distinct patients who have this condition."
+        data_tests: [not_null]
+
+  - name: mart_condition_prevalence
+    description: >
+      Condition prevalence by patient age band. One row per (condition_code, age_group).
+      Small age bands make rare-condition estimates noisy — total_patients_in_age_group is the
+      denominator, exposed so consumers can judge reliability.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: ['condition_code', 'age_group']
+    columns:
+      - name: age_group
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['0-17', '18-39', '40-64', '65-74', '75+']
+      - name: prevalence_pct
+        description: "100 * patients_with_condition / total_patients_in_age_group."
+        data_tests: [not_null]

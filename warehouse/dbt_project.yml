@@ -1,0 +1,30 @@
+name: 'healthcare'
+version: '1.0.0'
+config-version: 2
+
+# Which profile (connection) in profiles.yml this project uses.
+profile: 'healthcare'
+
+# Where dbt looks for each kind of file. These are the defaults; listed for clarity.
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+# `dbt clean` removes these.
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Default configs applied by folder. Anything here can be overridden per-model
+# with a {{ config(...) }} block at the top of the .sql file.
+models:
+  healthcare:
+    staging:
+      # Staging is cheap, always-fresh cleanup — views (no storage, recomputed on read).
+      +materialized: view
+    marts:
+      # Marts are queried repeatedly (by analysts and, later, the agent) — tables.
+      +materialized: table
