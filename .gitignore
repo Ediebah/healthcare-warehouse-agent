@@ -29,6 +29,10 @@ warehouse/.user.yml
 .env
 **/.env
 
+# --- local verification artifacts ---
+.playwright-mcp/
+/clinical-agent-*.png
+
 # --- OS / editor ---
 .DS_Store
 .vscode/
