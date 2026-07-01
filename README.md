@@ -31,17 +31,17 @@ Built on synthetic EHR data (zero PHI), so the whole thing is public and reprodu
                                                            │ RAG (token-overlap retrieval)
                                                            ▼
      ┌──────────────────────────────────  agent loop  ──────────────────────────────────┐
-     │ retrieve → hypothesize → SQL → execute(read-only) → SELF-HEAL → interpret          │
-     │                                                → recommend → STATISTICAL GUARDRAIL │
+     │ clarify? → retrieve → hypothesize → SQL → execute(read-only) → SELF-HEAL           │
+     │   → cite → GUARDRAIL (CIs · FDR · confounding) → VERIFY → interpret → recommend    │
      └───────────────────────────────────────┬───────────────────────────────────────────┘
-                                              ▼   Streamlit UI  (shows its work)
+                                              ▼   Streamlit UI (shows its work + cost trace)
 ```
 
 ---
 
 ## What's built
 
-**Both weekends are complete.**
+**Both weekends — plus a rigor & production-hardening pass (A–E) — are complete and pushed.**
 
 ### Weekend 1 — the warehouse (data-engineering substrate)
 - **Data:** [Synthea](https://github.com/synthetichealth/synthea) → 1,139 synthetic patients, reproducible (seed 12345).
@@ -55,15 +55,19 @@ Built on synthetic EHR data (zero PHI), so the whole thing is public and reprodu
 | marts/analytics (tables) | `mart_readmissions`, `mart_cost_by_condition`, `mart_condition_prevalence` | question-shaped models |
 
 ### Weekend 2 — the agent
-- **Semantic catalog** auto-generated from dbt artifacts (`manifest.json`/`catalog.json`): tables, grain, keys, types, **example values**, and metric SQL **with statistical caveats**.
+- **Semantic catalog** auto-generated from dbt artifacts: tables, grain, keys, types, **example values**, and metric SQL **with statistical caveats**.
 - **RAG** over the catalog (deterministic token-overlap retrieval — no embedding calls).
-- **Self-healing agent loop** (`retrieve → hypothesize → SQL → execute → self-heal → interpret → recommend`).
-- **Statistical guardrail** (deterministic): small-N flags, **Wilson confidence intervals**, multiple-comparison warnings, missing-denominator/base-rate checks, synthetic-data caveat.
-- **Safety:** read-only DuckDB connection + SQL validation (blocks `drop`/`delete`/`update`/multi-statement) + row cap.
-- **Streamlit UI** that shows the agent's work (hypothesis, SQL + any retries, result, guardrail, recommendation).
-- **Accuracy eval:** 8 questions with known answers → **8/8 (100%) SQL accuracy.**
+- **Self-healing agent loop** (`retrieve → hypothesize → SQL → execute → self-heal → interpret → recommend`) — self-heals on SQL errors *and* on empty/degenerate results.
+- **Streamlit UI** that shows the agent's work.
 
-Sample: given "prevalence of hypertension by age group," the agent returns the correct age gradient **and** flags that a rate was shown without its denominator — the base-rate discipline a plain text-to-SQL bot lacks.
+### Weekend 3 — rigor & production hardening (A–E)
+- **A · Guardrail → real inference:** Wilson CIs, **Newcombe CIs on group differences + Benjamini-Hochberg FDR**, **confounding** + **Simpson's-paradox** detection, and **skew-aware** summaries (median/IQR + bootstrap mean CI). Measured: **precision/recall 100/100** on labeled cases (`agent/guardrail_eval.py`).
+- **B · Trustworthiness:** a **clarify-gate** (asks instead of guessing on vague questions), a **verifier/critic** pass (does the SQL answer *this* question? confidence + issues), and **citations** (which tables were used).
+- **C · Eval at grade:** 19 categorized known-answer questions + clarify cases + a **caveat-faithfulness** metric + regression logging → **19/19 accuracy, faithfulness 100%**.
+- **D · Real warehouse:** a Snowflake `prod` target (identical models via `dbt build --target prod`) + **GitHub Actions CI** that rebuilds the warehouse, runs `dbt build` (90 tests), and runs the guardrail eval on every push.
+- **E · Ops & trust:** read-only + validated + row-capped SQL, a **query audit log**, **prompt-injection** blocking, and **cost/latency tracing** — see [GOVERNANCE.md](GOVERNANCE.md).
+
+Sample: asked "prevalence of hypertension by age group," the agent returns the correct age gradient, computes that **5/6 pairwise contrasts survive FDR** (largest 65–74 vs 18–39, risk difference +47.8pp, 95% CI [38.5, 56.7]), and warns the comparison is **unadjusted for confounders** — inference a plain text-to-SQL bot can't do.
 
 ---
 
@@ -85,9 +89,10 @@ cd warehouse && ../.venv/bin/dbt build --profiles-dir . && ../.venv/bin/dbt docs
 .venv/bin/python agent/build_catalog.py
 cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.env
 
-# 4. Run the agent (CLI) or the eval
+# 4. Run the agent (CLI) + the evals
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
-.venv/bin/python -m agent.eval        # -> Accuracy: 8/8
+.venv/bin/python -m agent.eval             # accuracy eval           -> 19/19
+.venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key) -> 100/100
 
 # 5. Run the demo UI
 .venv/bin/streamlit run app.py
@@ -103,17 +108,19 @@ new app → this repo → `app.py` → add `OPENAI_API_KEY` under **Secrets**.
 ## Repo layout
 
 ```
-├── README.md · CONCEPTS.md · RUNBOOK.md      docs: pitch / the WHY / the HOW (line-by-line)
+├── README.md · CONCEPTS.md · RUNBOOK.md · GOVERNANCE.md   docs: pitch / WHY / HOW / trust
 ├── requirements.txt
 ├── app.py                                    Streamlit demo UI
+├── .github/workflows/ci.yml                  dbt build + 90 tests + guardrail eval, every push
 ├── scripts/load_raw.py                       Synthea CSV → DuckDB raw
 ├── agent/
 │   ├── build_catalog.py                      dbt artifacts → semantic_catalog.{json,md}
-│   ├── retrieval.py                          RAG over the catalog
-│   ├── warehouse.py                          read-only, validated SQL execution
-│   ├── guardrails.py                         statistical guardrail (Wilson CI, small-N, …)
-│   ├── llm.py · agent.py                      OpenAI wrapper · the self-healing loop
-│   └── eval.py                               8-question accuracy eval
+│   ├── retrieval.py                          RAG over the catalog (token-overlap)
+│   ├── warehouse.py                          read-only, validated, audited SQL execution
+│   ├── guardrails.py                         statistical guardrail (Wilson/Newcombe CIs, FDR, …)
+│   ├── llm.py · agent.py                      OpenAI wrapper (traced) · the self-healing loop
+│   ├── eval.py                               19-question accuracy eval
+│   └── guardrail_eval.py                     guardrail precision/recall eval
 ├── warehouse/                                the dbt project (staging + marts + tests + docs)
 └── data/healthcare_demo.duckdb               slim marts DB for the deployed demo (committed)
 ```
@@ -129,7 +136,10 @@ new app → this repo → `app.py` → add `OPENAI_API_KEY` under **Secrets**.
 | dbt tests + agent SQL-error retry | "self-healing pipelines that detect and fix issues" |
 | staging → star schema → analytics marts, deep SQL | "data models, warehouse, deep SQL" |
 | Streamlit app, read-only guardrails, deployable | "ship a working tool in Python, production" |
-| **Statistical guardrail (Wilson CI, small-N, multiple comparisons)** | "interpret results, flag statistical issues" — the biostatistics moat |
+| **Statistical guardrail → inference (Newcombe CIs + FDR, confounding, Simpson's, skew)** | "interpret results, flag statistical issues" — the biostatistics moat |
+| Verifier/critic pass + clarify-gate + citations | trustworthy agents, human-in-the-loop |
+| CI (dbt build + 90 tests + guardrail eval) + Snowflake target | "self-healing pipelines," warehouse breadth |
+| Audit log, prompt-injection guard, cost tracing, governance doc | production ops + security posture |
 
 ---
 
