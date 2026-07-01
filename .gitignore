@@ -10,6 +10,8 @@ synthea/output/
 # --- DuckDB warehouse file (rebuilt by the loader + `dbt run`) ---
 data/*.duckdb
 data/*.duckdb.wal
+# ...except the slim demo DB, which the deployed Streamlit app needs (the full one is git-ignored)
+!data/healthcare_demo.duckdb
 
 # --- dbt build artifacts ---
 warehouse/target/
@@ -22,6 +24,10 @@ warehouse/.user.yml
 # --- local agent / session tooling (not part of the portfolio) ---
 .claude/
 .remember/
+
+# --- secrets ---
+.env
+**/.env
 
 # --- OS / editor ---
 .DS_Store

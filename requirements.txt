@@ -7,3 +7,10 @@
 dbt-core==1.11.11
 dbt-duckdb==1.10.1
 duckdb==1.5.4
+
+# --- Weekend 2: the agent ---
+openai>=1.40
+python-dotenv>=1.0
+streamlit>=1.38
+pandas>=2.0
+numpy>=1.26

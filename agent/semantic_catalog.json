@@ -1,0 +1,1282 @@
+{
+  "warehouse": "healthcare (DuckDB)",
+  "generated_from": "dbt manifest.json + catalog.json",
+  "tables": [
+    {
+      "name": "dim_condition",
+      "layer": "core",
+      "relation": "healthcare.main.dim_condition",
+      "description": "Condition-concept dimension. Grain: one row per SNOMED-CT condition_code.",
+      "primary_key": [
+        "condition_code"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "condition_code",
+          "type": "VARCHAR",
+          "description": "Primary key (SNOMED-CT code).",
+          "example_values": [
+            "160904001",
+            "73438004",
+            "427419006",
+            "161744009"
+          ]
+        },
+        {
+          "name": "condition_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Pneumonia (disorder)",
+            "Proliferative diabetic retinopathy due to type II diabetes mellitus",
+            "Mitral valve regurgitation (disorder)",
+            "Severe anxiety (panic) (finding)"
+          ]
+        },
+        {
+          "name": "code_system",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "SNOMED-CT"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "dim_medication",
+      "layer": "core",
+      "relation": "healthcare.main.dim_medication",
+      "description": "Medication-concept dimension. Grain: one row per RxNorm medication_code.",
+      "primary_key": [
+        "medication_code"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "medication_code",
+          "type": "VARCHAR",
+          "description": "Primary key (RxNorm code).",
+          "example_values": [
+            "313110",
+            "106892",
+            "562251",
+            "106258"
+          ]
+        },
+        {
+          "name": "medication_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Meperidine Hydrochloride 50 MG Oral Tablet",
+            "fosfomycin 3000 MG Granules for Oral Solution",
+            "amoxicillin 875 MG / clavulanate 125 MG Oral Tablet",
+            "120 ACTUAT fluticasone propionate 0.11 MG/ACTUAT Metered Dose Inhaler [Flovent]"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "dim_organization",
+      "layer": "core",
+      "relation": "healthcare.main.dim_organization",
+      "description": "Organization dimension. Grain: one row per organization_id.",
+      "primary_key": [
+        "organization_id"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "organization_id",
+          "type": "VARCHAR",
+          "description": "Primary key (UUID).",
+          "example_values": []
+        },
+        {
+          "name": "organization_name",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "TRINITY FAMILY MEDICINE",
+            "CAREWELL URGENT CARE CENTERS OF MA  PC",
+            "CLAFLIN HILL CORPORATION",
+            "LIFE CARE CENTER OF PLYMOUTH"
+          ]
+        },
+        {
+          "name": "city",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "BRIDGEWATER",
+            "FALMOUTH",
+            "NEEDHAM",
+            "LYNNFIELD"
+          ]
+        },
+        {
+          "name": "state",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "MA"
+          ]
+        },
+        {
+          "name": "zip_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "025328305",
+            "014535768",
+            "018033735",
+            "021711599"
+          ]
+        },
+        {
+          "name": "latitude",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "longitude",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "revenue",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "utilization",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "dim_patient",
+      "layer": "core",
+      "relation": "healthcare.main.dim_patient",
+      "description": "Patient dimension. Grain: one row per patient. Adds derived age + clinical age bands.",
+      "primary_key": [
+        "patient_id"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "Primary key (UUID).",
+          "example_values": []
+        },
+        {
+          "name": "birth_date",
+          "type": "DATE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "death_date",
+          "type": "DATE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "is_deceased",
+          "type": "BOOLEAN",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "age",
+          "type": "DOUBLE",
+          "description": "Age in years at death (if deceased) or as of the current date.",
+          "example_values": []
+        },
+        {
+          "name": "age_group",
+          "type": "VARCHAR",
+          "description": "Clinical age band.",
+          "example_values": [
+            "0-17",
+            "18-39",
+            "65-74",
+            "40-64"
+          ]
+        },
+        {
+          "name": "gender",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "M",
+            "F"
+          ]
+        },
+        {
+          "name": "race",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "white",
+            "native",
+            "asian",
+            "other"
+          ]
+        },
+        {
+          "name": "ethnicity",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "nonhispanic",
+            "hispanic"
+          ]
+        },
+        {
+          "name": "marital_status",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "M",
+            "W",
+            "D",
+            "S"
+          ]
+        },
+        {
+          "name": "city",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Somerville",
+            "Hopkinton",
+            "Hudson",
+            "Pepperell"
+          ]
+        },
+        {
+          "name": "state",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Massachusetts"
+          ]
+        },
+        {
+          "name": "county",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Suffolk County",
+            "Worcester County",
+            "Nantucket County",
+            "Barnstable County"
+          ]
+        },
+        {
+          "name": "zip_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "02134",
+            "02155",
+            "01904",
+            "02324"
+          ]
+        },
+        {
+          "name": "healthcare_expenses",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "healthcare_coverage",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "income",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "dim_payer",
+      "layer": "core",
+      "relation": "healthcare.main.dim_payer",
+      "description": "Payer dimension. Grain: one row per payer_id.",
+      "primary_key": [
+        "payer_id"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "payer_id",
+          "type": "VARCHAR",
+          "description": "Primary key (UUID).",
+          "example_values": []
+        },
+        {
+          "name": "payer_name",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Medicare",
+            "Blue Cross Blue Shield",
+            "UnitedHealthcare",
+            "NO_INSURANCE"
+          ]
+        },
+        {
+          "name": "ownership",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "PRIVATE",
+            "GOVERNMENT",
+            "NO_INSURANCE"
+          ]
+        },
+        {
+          "name": "state_headquartered",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "amount_covered",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "amount_uncovered",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "revenue",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "covered_encounters",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "uncovered_encounters",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "dim_provider",
+      "layer": "core",
+      "relation": "healthcare.main.dim_provider",
+      "description": "Provider dimension with denormalized organization name. Grain: one row per provider_id.",
+      "primary_key": [
+        "provider_id"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "provider_id",
+          "type": "VARCHAR",
+          "description": "Primary key (UUID).",
+          "example_values": []
+        },
+        {
+          "name": "provider_name",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Huong243 Jakubowski832",
+            "Jasper743 Champlin946",
+            "Carylon722 Corwin846",
+            "Cristopher265 Heaney114"
+          ]
+        },
+        {
+          "name": "gender",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "M",
+            "F"
+          ]
+        },
+        {
+          "name": "specialty",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "GENERAL PRACTICE"
+          ]
+        },
+        {
+          "name": "organization_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "organization_name",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "BOSTON HEALTH CARE FOR THE HOMELESS PROGRAM INC",
+            "NURSE ON CALL",
+            "CAPE HERITAGE REHABILITATION & HEALTH CARE CENTER",
+            "EAST FALMOUTH FAMILY PRACTICE PC"
+          ]
+        },
+        {
+          "name": "city",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "NORTH READING",
+            "SHARON",
+            "BOSTON",
+            "MARLBOROUGH"
+          ]
+        },
+        {
+          "name": "state",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "MA"
+          ]
+        },
+        {
+          "name": "zip_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "025328305",
+            "014535768",
+            "018033735",
+            "021711599"
+          ]
+        },
+        {
+          "name": "encounter_count",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "procedure_count",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "fct_conditions",
+      "layer": "core",
+      "relation": "healthcare.main.fct_conditions",
+      "description": "Condition-episode fact. Grain: one row per patient-condition episode.",
+      "primary_key": [
+        "condition_episode_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        },
+        {
+          "column": "condition_code",
+          "references_table": "dim_condition",
+          "references_column": "condition_code"
+        }
+      ],
+      "columns": [
+        {
+          "name": "condition_episode_id",
+          "type": "VARCHAR",
+          "description": "Surrogate primary key.",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "condition_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "160904001",
+            "73438004",
+            "427419006",
+            "161744009"
+          ]
+        },
+        {
+          "name": "encounter_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "onset_date",
+          "type": "DATE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "resolved_date",
+          "type": "DATE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "is_active",
+          "type": "BOOLEAN",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "duration_days",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "fct_encounters",
+      "layer": "core",
+      "relation": "healthcare.main.fct_encounters",
+      "description": "Encounter fact. Grain: one row per encounter. Measures: costs, out-of-pocket, duration.",
+      "primary_key": [
+        "encounter_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        },
+        {
+          "column": "organization_id",
+          "references_table": "dim_organization",
+          "references_column": "organization_id"
+        },
+        {
+          "column": "provider_id",
+          "references_table": "dim_provider",
+          "references_column": "provider_id"
+        },
+        {
+          "column": "payer_id",
+          "references_table": "dim_payer",
+          "references_column": "payer_id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "encounter_id",
+          "type": "VARCHAR",
+          "description": "Primary key (natural).",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "organization_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "provider_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "payer_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_date",
+          "type": "DATE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_start",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_stop",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_class",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "ambulatory",
+            "virtual",
+            "wellness",
+            "hospice"
+          ]
+        },
+        {
+          "name": "encounter_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "305408004",
+            "453131000124105",
+            "185349003",
+            "305336008"
+          ]
+        },
+        {
+          "name": "encounter_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Well child visit (procedure)",
+            "Non-urgent orthopedic admission (procedure)",
+            "Urgent care clinic (environment)",
+            "Admission to ward (procedure)"
+          ]
+        },
+        {
+          "name": "reason_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "128613002",
+            "37849005",
+            "37320007",
+            "110030002"
+          ]
+        },
+        {
+          "name": "reason_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Seizure disorder (disorder)",
+            "Mitral valve regurgitation (disorder)",
+            "Idiopathic atrophic hypothyroidism (disorder)",
+            "Bleeding from anus (disorder)"
+          ]
+        },
+        {
+          "name": "base_encounter_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "total_claim_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "payer_coverage",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "patient_out_of_pocket",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "duration_minutes",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "fct_medications",
+      "layer": "core",
+      "relation": "healthcare.main.fct_medications",
+      "description": "Medication-order fact. Grain: one row per medication order.",
+      "primary_key": [
+        "medication_order_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        },
+        {
+          "column": "medication_code",
+          "references_table": "dim_medication",
+          "references_column": "medication_code"
+        }
+      ],
+      "columns": [
+        {
+          "name": "medication_order_id",
+          "type": "VARCHAR",
+          "description": "Surrogate primary key.",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "medication_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "106892",
+            "562251",
+            "106258",
+            "313820"
+          ]
+        },
+        {
+          "name": "payer_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "dispense_start",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "dispense_stop",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "is_active",
+          "type": "BOOLEAN",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "base_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "payer_coverage",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "dispenses",
+          "type": "INTEGER",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "total_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "days_supplied",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "fct_observations",
+      "layer": "core",
+      "relation": "healthcare.main.fct_observations",
+      "description": "Observation fact (labs/vitals/survey). Grain: one row per measurement.",
+      "primary_key": [
+        "observation_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "observation_id",
+          "type": "VARCHAR",
+          "description": "Surrogate primary key.",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "encounter_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "observed_at",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "observation_category",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "vital-signs",
+            "laboratory",
+            "survey",
+            "imaging"
+          ]
+        },
+        {
+          "name": "observation_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "55758-7",
+            "5804-0",
+            "6690-2",
+            "93029-7"
+          ]
+        },
+        {
+          "name": "observation_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Housing status",
+            "QOLS",
+            "Body Height",
+            "Alkaline phosphatase [Enzymatic activity/volume] in Serum or Plasma"
+          ]
+        },
+        {
+          "name": "value_text",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "25.0",
+            "121.4",
+            "English",
+            "5.0"
+          ]
+        },
+        {
+          "name": "value_numeric",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "units",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "{score}",
+            "s",
+            "pg/mL",
+            "kg/m2"
+          ]
+        },
+        {
+          "name": "value_type",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "text",
+            "numeric"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fct_procedures",
+      "layer": "core",
+      "relation": "healthcare.main.fct_procedures",
+      "description": "Procedure fact. Grain: one row per procedure performed.",
+      "primary_key": [
+        "procedure_event_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "procedure_event_id",
+          "type": "VARCHAR",
+          "description": "Surrogate primary key.",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "procedure_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "241046008",
+            "52052004",
+            "269911007",
+            "305351004"
+          ]
+        },
+        {
+          "name": "encounter_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "procedure_start",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "procedure_stop",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "base_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "reason_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "37320007",
+            "267020005",
+            "1231000119100",
+            "37849005"
+          ]
+        },
+        {
+          "name": "reason_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Traumatic dislocation of temporomandibular joint (disorder)",
+            "History of aortic valve replacement (situation)",
+            "Proliferative diabetic retinopathy due to type II diabetes mellitus",
+            "Adolescent idiopathic scoliosis (disorder)"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mart_condition_prevalence",
+      "layer": "analytics",
+      "relation": "healthcare.main.mart_condition_prevalence",
+      "description": "Condition prevalence by patient age band. One row per (condition_code, age_group). Small age bands make rare-condition estimates noisy \u2014 total_patients_in_age_group is the denominator, exposed so consumers can judge reliability.",
+      "primary_key": [
+        "condition_code",
+        "age_group"
+      ],
+      "foreign_keys": [],
+      "columns": [
+        {
+          "name": "condition_code",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "160904001",
+            "73438004",
+            "427419006",
+            "161744009"
+          ]
+        },
+        {
+          "name": "condition_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Pneumonia (disorder)",
+            "Proliferative diabetic retinopathy due to type II diabetes mellitus",
+            "Mitral valve regurgitation (disorder)",
+            "Severe anxiety (panic) (finding)"
+          ]
+        },
+        {
+          "name": "age_group",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "18-39",
+            "0-17",
+            "40-64",
+            "75+"
+          ]
+        },
+        {
+          "name": "patients_with_condition",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "total_patients_in_age_group",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "prevalence_pct",
+          "type": "DOUBLE",
+          "description": "100 * patients_with_condition / total_patients_in_age_group.",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "mart_cost_by_condition",
+      "layer": "analytics",
+      "relation": "healthcare.main.mart_cost_by_condition",
+      "description": "Cost of the diagnosing encounter aggregated by condition (NOT lifetime cost of care). One row per condition_code.",
+      "primary_key": [
+        "condition_code"
+      ],
+      "foreign_keys": [
+        {
+          "column": "condition_code",
+          "references_table": "dim_condition",
+          "references_column": "condition_code"
+        }
+      ],
+      "columns": [
+        {
+          "name": "condition_code",
+          "type": "VARCHAR",
+          "description": "PK \u2014 SNOMED-CT condition code.",
+          "example_values": [
+            "88805009",
+            "160904001",
+            "1255252008",
+            "22253000"
+          ]
+        },
+        {
+          "name": "condition_description",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": [
+            "Seizure disorder (disorder)",
+            "Sputum finding (finding)",
+            "Pneumonia (disorder)",
+            "Traumatic dislocation of temporomandibular joint (disorder)"
+          ]
+        },
+        {
+          "name": "num_episodes",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "num_patients",
+          "type": "BIGINT",
+          "description": "Distinct patients who have this condition.",
+          "example_values": []
+        },
+        {
+          "name": "total_diagnosing_encounter_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "avg_diagnosing_encounter_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    },
+    {
+      "name": "mart_readmissions",
+      "layer": "analytics",
+      "relation": "healthcare.main.mart_readmissions",
+      "description": "30-day inpatient readmission flags. One row per index inpatient encounter; is_30d_readmission is true when the same patient is admitted again within 0-30 days of discharge.",
+      "primary_key": [
+        "index_encounter_id"
+      ],
+      "foreign_keys": [
+        {
+          "column": "patient_id",
+          "references_table": "dim_patient",
+          "references_column": "patient_id"
+        }
+      ],
+      "columns": [
+        {
+          "name": "index_encounter_id",
+          "type": "VARCHAR",
+          "description": "PK \u2014 the index inpatient encounter.",
+          "example_values": []
+        },
+        {
+          "name": "patient_id",
+          "type": "VARCHAR",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "admission_date",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "discharge_date",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "next_admission_start",
+          "type": "TIMESTAMP",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "days_to_next_admission",
+          "type": "BIGINT",
+          "description": "",
+          "example_values": []
+        },
+        {
+          "name": "is_30d_readmission",
+          "type": "BOOLEAN",
+          "description": "True if a subsequent inpatient admission occurred within 30 days of discharge.",
+          "example_values": []
+        },
+        {
+          "name": "total_claim_cost",
+          "type": "DOUBLE",
+          "description": "",
+          "example_values": []
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "readmission_rate_30d",
+      "definition": "Share of index inpatient stays followed by another inpatient admission within 0-30 days of discharge.",
+      "model": "mart_readmissions",
+      "sql": "avg(is_30d_readmission::int)  -- optionally *100 for a percentage",
+      "caveats": "Inpatient-only. Denominator is index inpatient stays, not patients."
+    },
+    {
+      "name": "avg_encounter_cost",
+      "definition": "Average total billed cost across encounters.",
+      "model": "fct_encounters",
+      "sql": "avg(total_claim_cost)",
+      "caveats": "Billed (claim) cost, synthetic. Segment by encounter_class for fair comparisons."
+    },
+    {
+      "name": "avg_patient_out_of_pocket",
+      "definition": "Average amount the patient pays after insurance, per encounter.",
+      "model": "fct_encounters",
+      "sql": "avg(patient_out_of_pocket)  -- total_claim_cost - payer_coverage",
+      "caveats": "Synthetic payer logic; not real benefit design."
+    },
+    {
+      "name": "condition_prevalence_by_age",
+      "definition": "Percent of patients in an age band who have a given condition.",
+      "model": "mart_condition_prevalence",
+      "sql": "prevalence_pct  -- 100 * patients_with_condition / total_patients_in_age_group",
+      "caveats": "Small age bands (e.g. 75+, n\u224891) give noisy estimates \u2014 check total_patients_in_age_group."
+    },
+    {
+      "name": "avg_diagnosing_encounter_cost_by_condition",
+      "definition": "Average cost of the encounter at which a condition was diagnosed, per condition.",
+      "model": "mart_cost_by_condition",
+      "sql": "avg_diagnosing_encounter_cost",
+      "caveats": "NOT lifetime cost of treating the condition \u2014 no causal attribution of downstream care."
+    },
+    {
+      "name": "total_medication_cost",
+      "definition": "Total cost of medication orders.",
+      "model": "fct_medications",
+      "sql": "sum(total_cost)",
+      "caveats": "Order-level synthetic cost; a patient may have many orders of one drug."
+    }
+  ]
+}
