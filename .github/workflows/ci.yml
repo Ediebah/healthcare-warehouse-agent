@@ -25,6 +25,7 @@ jobs:
 
       - name: Generate a small, reproducible Synthea dataset
         run: |
+          mkdir -p synthea data          # these dirs are git-ignored (empty) → recreate on checkout
           curl -L --fail -o synthea/synthea-with-dependencies.jar \
             https://github.com/synthetichealth/synthea/releases/download/master-branch-latest/synthea-with-dependencies.jar
           cd synthea
