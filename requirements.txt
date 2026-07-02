@@ -15,3 +15,5 @@ statsmodels==0.14.6
 patsy==1.0.2
 scikit-learn==1.9.0
 plotly==6.8.0
+
+# redeploy: force clean rebuild (clears cached modules)
