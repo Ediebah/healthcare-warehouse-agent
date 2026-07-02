@@ -13,4 +13,5 @@ duckdb==1.5.4
 scipy==1.18.0
 statsmodels==0.14.6
 patsy==1.0.2
+scikit-learn==1.9.0
 plotly==6.8.0

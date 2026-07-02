@@ -210,8 +210,10 @@ def _persist_trace(question: str, trace: dict | None, error: str | None) -> None
 # Questions that likely need an inferential MODEL rather than a plain aggregation.
 # No trailing \b — must match inflections (predict-s, adjust-ing, associat-ed, correlat-ion).
 _MODEL_HINT = re.compile(
-    r"\b(predict|risk factor|associat|correlat|adjust|controlling for|confound|odds|hazard|"
-    r"survival|time.to|effect of|independent of|regression|proportion of variance)", re.I)
+    r"\b(predict|risk factor|feature importance|most (important|predictive)|driver|associat|correlat|"
+    r"adjust|controlling for|confound|odds|hazard|survival|time.to|effect of|impact of|independent of|"
+    r"regression|proportion of variance|forecast|projection|trend|over time|seasonal|"
+    r"causal|treatment effect|uplift)", re.I)
 
 
 def _route(question: str, context: str) -> dict:
@@ -224,22 +226,35 @@ def _route(question: str, context: str) -> dict:
         "between two variables) rather than a plain count/rate/cost aggregation.\n"
         "If it does, pick a model and write a read-only DuckDB SELECT returning ONE ROW PER UNIT (per "
         "patient or encounter) with the outcome + predictor columns, each aliased to a simple snake_case "
-        "name (cast booleans to int).\n"
-        "model_type: 'logistic' (binary outcome), 'ols' (continuous outcome e.g. cost), 'survival' "
-        "(time-to-event — death, time-to-readmission, time-until-X; needs a `duration` and a binary "
-        "`event`, plus optional `predictors` for Cox hazard ratios and a categorical `group` to stratify "
-        "the Kaplan-Meier curves), or 'association' (two variables).\n"
-        "Choose 'logistic' for a binary yes/no outcome measured within a FIXED window (e.g. "
-        "is_30d_readmission, in-hospital death) — report odds ratios. Choose 'survival' only when each "
-        "subject has a genuine follow-up duration and the event TIMING varies (e.g. mortality: "
-        "duration=age, event=is_deceased, group=sex) — report Kaplan-Meier curves + Cox hazard ratios. "
-        "When a time-to-event question could fit either, PREFER survival.\n"
+        "name (cast booleans to int). (Exception: 'timeseries' returns one row per time PERIOD.)\n"
+        "model_type — choose ONE:\n"
+        "  'logistic'    binary yes/no outcome in a FIXED window (e.g. is_30d_readmission) → odds ratios.\n"
+        "  'ols'         continuous outcome (e.g. cost) → adjusted coefficients.\n"
+        "  'survival'    time-to-event: needs `duration` + binary `event`, optional `predictors` (Cox "
+        "hazard ratios) and a categorical `group` (Kaplan-Meier curves). Prefer over logistic when the "
+        "event TIMING varies (e.g. mortality: duration=age, event=is_deceased, group=sex).\n"
+        "  'association' two variables `var_a`, `var_b` (t-test / chi-square / correlation).\n"
+        "  'forest'      'which factors most predict X / strongest risk factors / feature importance' → "
+        "random forest. Needs `outcome` (binary or continuous) + several `predictors`.\n"
+        "  'timeseries'  'forecast / trend over time' → needs `time_col`, `value_col`, `periods` (int, "
+        "e.g. 12), `seasonal_periods` (12 for monthly). analytic_sql MUST aggregate to ONE ROW PER PERIOD "
+        "(e.g. date_trunc('month', encounter_date) AS period, count(*) AS encounters), keep only COMPLETE "
+        "recent periods (roughly the last 120 months, and EXCLUDE the current partial period), ORDER BY "
+        "the period ascending.\n"
+        "  'causal'      the EFFECT / IMPACT of a specific binary intervention or exposure (on a drug vs "
+        "not, insured vs not, had-procedure vs not) on an outcome, adjusting for confounders → T-learner "
+        "uplift. Needs `outcome`, a binary `treatment`, and `predictors` (the confounders). Binarize the "
+        "treatment in SQL (e.g. `CASE WHEN healthcare_coverage > 0 THEN 1 ELSE 0 END AS insured`). Prefer "
+        "'causal' over 'survival'/'logistic' when the question NAMES an intervention and asks its effect "
+        "adjusting for confounders — even if the outcome is mortality.\n"
         "CRITICAL: every column name you put in outcome / predictors / duration / event / group / var_a / "
-        "var_b MUST exactly match an alias in analytic_sql. Use simple snake_case aliases and NEVER a SQL "
-        "reserved word (alias sex, not 'group'; e.g. `gender AS sex`, then set \"group\":\"sex\").\n"
+        "var_b / time_col / value_col / treatment MUST exactly match an alias in analytic_sql. Use simple "
+        "snake_case aliases and NEVER a SQL reserved word (alias sex, not 'group'; e.g. `gender AS sex`, "
+        "then set \"group\":\"sex\").\n"
         'Return JSON: {"mode":"model"|"aggregate", "model_type":"...", "outcome":"col", '
         '"predictors":["col"], "duration":"col", "event":"col", "group":"col", "var_a":"col", '
-        '"var_b":"col", "analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. '
+        '"var_b":"col", "time_col":"col", "value_col":"col", "periods":12, "seasonal_periods":12, '
+        '"treatment":"col", "analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. '
         'Plain aggregation → {"mode":"aggregate"}.',
     )
 
@@ -257,6 +272,14 @@ def _fit_model(spec: dict, df) -> modeling.ModelResult:
         return modeling.fit_cox(df, spec["duration"], spec["event"], spec.get("predictors", []))
     if mt == "association":
         return modeling.test_association(df, spec["var_a"], spec["var_b"])
+    if mt == "forest":
+        return modeling.fit_forest(df, spec["outcome"], spec.get("predictors", []))
+    if mt == "timeseries":
+        return modeling.fit_timeseries(df, spec["time_col"], spec["value_col"],
+                                       int(spec.get("periods") or 12),
+                                       int(spec.get("seasonal_periods") or 12))
+    if mt == "causal":
+        return modeling.fit_uplift(df, spec["outcome"], spec["treatment"], spec.get("predictors", []))
     return modeling.ModelResult(mt or "?", spec.get("outcome", ""), 0, "", error=f"unknown model_type: {mt}")
 
 
@@ -264,9 +287,17 @@ def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
     return llm.complete(
         _SYSTEM,
         f"QUESTION: {question}\n\nYou fit a {mr.model_type} model. Results:\n{modeling.render(mr)}\n\n"
-        "Explain in 3-5 sentences: interpret the key effect estimates (odds/hazard ratios or "
-        "coefficients) WITH their 95% CIs and p-values; say which are significant; stress they are "
-        "ADJUSTED (each holds the others fixed). Use markdown headers:\n"
+        "Explain in 3-5 sentences, matched to the model type:\n"
+        "- logistic / ols / survival: interpret the key odds/hazard ratios or coefficients WITH their "
+        "95% CIs and p-values; say which are significant; stress they are ADJUSTED (each holds the "
+        "others fixed).\n"
+        "- forest: name the most predictive features by importance; importance is PREDICTIVE, not causal, "
+        "and does not carry a direction or a p-value.\n"
+        "- timeseries: describe the trend and the projected values with their widening uncertainty band; "
+        "do not over-read a synthetic forecast.\n"
+        "- causal: report the average uplift with its 95% CI; note it is observational and residual "
+        "confounding may remain.\n"
+        "Use markdown headers:\n"
         "**Findings** — what the model shows.\n"
         "**Recommendation** — one actionable point (optional).\n"
         "**Model caveats** — association is not causation; model assumptions (proportional hazards / "

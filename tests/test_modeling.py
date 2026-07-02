@@ -69,6 +69,49 @@ def test_survival_km_and_cox():
     assert {c["group"] for c in mr.km} == {"A", "B"}
 
 
+def test_forest_ranks_informative_feature_top():
+    rng = np.random.default_rng(5)
+    n = 600
+    signal = rng.normal(0, 1, n)
+    noise = rng.normal(0, 1, n)
+    junk = rng.choice(["a", "b", "c"], n)
+    y = (rng.random(n) < 1 / (1 + np.exp(-(2.0 * signal)))).astype(int)
+    df = pd.DataFrame({"y": y, "signal": signal, "noise": noise, "junk": junk})
+    r = modeling.fit_forest(df, "y", ["signal", "noise", "junk"])
+    assert r.error is None and r.model_type == "forest" and r.terms
+    assert r.terms[0].name == "signal"                    # sorted desc by importance
+    assert "AUC=" in r.fit_stat
+
+
+def test_timeseries_forecasts_forward():
+    rng = np.random.default_rng(6)
+    n = 48
+    periods = pd.date_range("2018-01-01", periods=n, freq="MS")
+    trend = np.arange(n) * 2.0
+    season = 10 * np.sin(np.arange(n) * 2 * np.pi / 12)
+    df = pd.DataFrame({"period": periods, "n": 100 + trend + season + rng.normal(0, 2, n)})
+    r = modeling.fit_timeseries(df, "period", "n", periods=6, seasonal_periods=12)
+    assert r.error is None and r.model_type == "timeseries"
+    fc = [p for p in r.series if p["kind"] == "forecast"]
+    hist = [p for p in r.series if p["kind"] == "history"]
+    assert len(fc) == 6 and len(hist) == n
+    assert all(p["lower"] <= p["value"] <= p["upper"] for p in fc)
+
+
+def test_uplift_recovers_positive_effect():
+    rng = np.random.default_rng(7)
+    n = 800
+    x = rng.normal(0, 1, n)
+    treat = rng.integers(0, 2, n)
+    base = 1 / (1 + np.exp(-(0.5 * x)))
+    y = (rng.random(n) < np.clip(base + 0.2 * treat, 0, 1)).astype(int)   # treatment raises risk ~0.2
+    df = pd.DataFrame({"y": y, "treat": treat, "x": x})
+    r = modeling.fit_uplift(df, "y", "treat", ["x"])
+    assert r.error is None and r.model_type == "causal" and r.terms
+    ate = r.terms[0]
+    assert ate.estimate > 0 and ate.ci_low <= ate.estimate <= ate.ci_high
+
+
 def test_to_binary():
     assert list(modeling._to_binary(pd.Series([True, False, True]))) == [1, 0, 1]
     assert list(modeling._to_binary(pd.Series([0, 1, 0]))) == [0, 1, 0]

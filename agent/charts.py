@@ -178,8 +178,14 @@ def forest_plot(model: dict):
     label = model.get("effect_label", "estimate")
     is_ratio = "ratio" in label
     null = 1.0 if is_ratio else 0.0
+
+    def _sig(t):                                   # p<0.05, or (no p, e.g. bootstrap ATE) CI excludes null
+        if t["p"] == t["p"]:
+            return "significant" if t["p"] < 0.05 else "n.s."
+        return "significant" if (t["ci_low"] > null or t["ci_high"] < null) else "n.s."
+
     d = pd.DataFrame([{"term": t["name"], "est": t["estimate"], "lo": t["ci_low"], "hi": t["ci_high"],
-                       "sig": "significant" if t["p"] < 0.05 else "n.s."} for t in terms])
+                       "sig": _sig(t)} for t in terms])
     xscale = alt.Scale(type="log") if is_ratio else alt.Scale(zero=False)
     base = alt.Chart(d).encode(y=alt.Y("term:N", sort=list(d["term"]), title=None))
     ci = base.mark_rule(color=MUTED, strokeWidth=2).encode(
@@ -214,6 +220,47 @@ def survival_plot(km: list):
             x="time:Q", y="ci_low:Q", y2="ci_high:Q", color=alt.Color("group:N", scale=colors, legend=None))
         layers = [band, line]
     return _finish(alt.layer(*layers), 340, "Kaplan-Meier survival curve")
+
+
+def importance_chart(model: dict):
+    """Horizontal bars of random-forest permutation importances (most predictive feature on top)."""
+    if not model or model.get("error"):
+        return None
+    terms = model.get("terms", [])
+    if not terms:
+        return None
+    d = pd.DataFrame([{"feature": t["name"], "importance": t["estimate"]} for t in terms])
+    d = d.sort_values("importance", ascending=False)
+    order = list(d["feature"])
+    base = alt.Chart(d).encode(y=alt.Y("feature:N", sort=order, title=None))
+    bars = base.mark_bar(color=TEAL, cornerRadiusEnd=3, height={"band": 0.7}).encode(
+        x=alt.X("importance:Q", title="permutation importance (drop in model skill)"),
+        tooltip=["feature", alt.Tooltip("importance:Q", format=".4f")])
+    labels = base.mark_text(align="left", dx=4, color=INK, fontSize=11).encode(
+        x="importance:Q", text=alt.Text("importance:Q", format=".3f"))
+    return _finish(alt.layer(bars, labels), min(460, 110 + 46 * len(d)),
+                   "Feature importance — what most predicts the outcome")
+
+
+def forecast_chart(series: list):
+    """Time-series history (solid) + forecast (dashed) with a 95% prediction band."""
+    if not series:
+        return None
+    d = pd.DataFrame(series)
+    d["time"] = pd.to_datetime(d["time"])
+    hist, fc = d[d["kind"] == "history"], d[d["kind"] == "forecast"]
+    if len(hist):                                  # bridge the last observed point into the forecast line
+        fc = pd.concat([hist.tail(1).assign(kind="forecast"), fc], ignore_index=True)
+    layers = []
+    if len(fc) and fc["lower"].notna().any():
+        layers.append(alt.Chart(fc).mark_area(opacity=0.15, color=TEAL).encode(
+            x=alt.X("time:T", title=None), y=alt.Y("lower:Q", title="value"), y2="upper:Q"))
+    layers.append(alt.Chart(hist).mark_line(color=TEAL, strokeWidth=2).encode(
+        x="time:T", y=alt.Y("value:Q", title="value"), tooltip=["time:T", "value:Q"]))
+    layers.append(alt.Chart(fc).mark_line(color=TEAL_HI, strokeWidth=2, strokeDash=[5, 4]).encode(
+        x="time:T", y="value:Q", tooltip=["time:T", "value:Q"]))
+    return _finish(alt.layer(*layers), 340,
+                   "Forecast — history (solid) + projection (dashed) with 95% band")
 
 
 def radar_chart(df: pd.DataFrame, question: str = ""):

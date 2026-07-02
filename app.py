@@ -26,7 +26,15 @@ except Exception:
     pass  # no secrets.toml locally — falls back to agent/.env
 
 from agent.agent import run_analysis
-from agent.charts import build_chart, forest_plot, kpi_cards, radar_chart, survival_plot
+from agent.charts import (
+    build_chart,
+    forecast_chart,
+    forest_plot,
+    importance_chart,
+    kpi_cards,
+    radar_chart,
+    survival_plot,
+)
 from agent.llm import MODEL
 from agent.retrieval import load_catalog
 
@@ -40,6 +48,9 @@ EXAMPLES = [
     "How does average encounter cost differ by encounter class?",
     "What predicts 30-day readmission, adjusting for age and sex?",
     "How does patient survival differ by sex?",
+    "What are the strongest risk factors for patient mortality?",
+    "Forecast monthly encounter volume for the next 12 months.",
+    "What is the effect of insurance coverage on mortality, adjusting for age and income?",
 ]
 
 # ───────────────────────────── design system ─────────────────────────────
@@ -260,12 +271,28 @@ def _render_model(m: dict) -> str:
     head = f"**{m['model_type'].upper()}** · outcome `{m['outcome']}` · n={m['n']:,}"
     if m.get("fit_stat"):
         head += f" · {m['fit_stat']}"
-    lines = [head, "", f"| term | {m['effect_label']} | 95% CI | p-value |", "|---|---|---|---|"]
-    for t in m["terms"]:
-        lo = t["ci_low"]
-        ci = "—" if lo != lo else f"[{lo:.3f}, {t['ci_high']:.3f}]"     # lo != lo  →  NaN
-        star = " ✳️" if t["p"] < 0.05 else ""
-        lines.append(f"| `{t['name']}` | {t['estimate']:.3f} | {ci} | {t['p']:.4f}{star} |")
+    if m.get("model_type") == "timeseries":                          # forecast periods, not effect terms
+        fc = [p for p in m.get("series", []) if p["kind"] == "forecast"]
+        lines = [head, "", "| period | forecast | 95% band |", "|---|---|---|"]
+        for p in fc:
+            lines.append(f"| {p['time'][:10]} | {p['value']:.1f} | [{p['lower']:.1f}, {p['upper']:.1f}] |")
+        if m.get("note"):
+            lines.append(f"\n_{m['note']}_")
+        return "\n".join(lines)
+    terms = m["terms"]
+    has_ci = any(t["ci_low"] == t["ci_low"] for t in terms)          # drop columns that don't apply
+    has_p = any(t["p"] == t["p"] for t in terms)                     # (e.g. forest importance: neither)
+    cols = ["term", m["effect_label"]] + (["95% CI"] if has_ci else []) + (["p-value"] if has_p else [])
+    lines = [head, "", "| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
+    for t in terms:
+        row = [f"`{t['name']}`", f"{t['estimate']:.3f}"]
+        if has_ci:
+            lo = t["ci_low"]
+            row.append("—" if lo != lo else f"[{lo:.3f}, {t['ci_high']:.3f}]")    # lo != lo → NaN
+        if has_p:
+            pv = t["p"]
+            row.append("—" if pv != pv else f"{pv:.4f}" + (" ✳️" if pv < 0.05 else ""))
+        lines.append("| " + " | ".join(row) + " |")
     if m.get("note"):
         lines.append(f"\n_{m['note']}_")
     return "\n".join(lines)
@@ -303,10 +330,16 @@ if result is not None:
             chips = "".join(f"<span class='pill'>{html.escape(t)}</span>" for t in result.citations)
             st.markdown(f"<div class='cite'>tables used: {chips}</div>", unsafe_allow_html=True)
         eyebrow("Statistical model")
-        _km = result.model.get("km")
-        if _km:
-            st.altair_chart(survival_plot(_km), use_container_width=True)
-        _fp = forest_plot(result.model)
+        _mt = result.model.get("model_type")
+        if result.model.get("km"):                       # survival → Kaplan-Meier curves
+            st.altair_chart(survival_plot(result.model["km"]), use_container_width=True)
+        if result.model.get("series"):                   # time-series → history + forecast
+            st.altair_chart(forecast_chart(result.model["series"]), use_container_width=True)
+        if _mt == "forest":                              # ML → feature-importance bars
+            _imp = importance_chart(result.model)
+            if _imp is not None:
+                st.altair_chart(_imp, use_container_width=True)
+        _fp = forest_plot(result.model)                  # regression/survival/causal → effect forest
         if _fp is not None:
             st.altair_chart(_fp, use_container_width=True)
         st.markdown(_render_model(result.model))
