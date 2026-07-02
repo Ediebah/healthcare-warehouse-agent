@@ -508,27 +508,37 @@ def fit_noninferiority(df: pd.DataFrame, group: str, outcome: str, margin: float
             lo, hi = diff - 1.96 * se, diff + 1.96 * se
             test = "Welch CI on the mean difference"
 
-        if higher_is_better:
-            ni, superior, bound = lo > -margin, lo > 0, lo
-        else:
-            ni, superior, bound = hi < margin, hi < 0, hi
+        fm_p = None
+        if binary:                                   # Farrington–Manning score test IS the NI decision
+            from statsmodels.stats.proportion import test_proportions_2indep
+            val = -margin if higher_is_better else margin
+            alt = "larger" if higher_is_better else "smaller"
+            fm_p = float(test_proportions_2indep(kt, nt, kc, nc, value=val, compare="diff",
+                                                 method="score", alternative=alt).pvalue)
+            ni = fm_p < 0.025                         # one-sided α = 0.025
+            test = "Farrington–Manning score test (NI) + Newcombe 95% CI"
+        else:                                         # continuous → CI-vs-margin
+            ni = (lo > -margin) if higher_is_better else (hi < margin)
+        superior = (lo > 0) if higher_is_better else (hi < 0)
+        bound = lo if higher_is_better else hi
 
         def fmt(x):
             return f"{x * 100:.1f}%" if binary else f"{x:.2f}"
 
         edge = "lower" if higher_is_better else "upper"
+        psuf = f"; Farrington–Manning p={fm_p:.3g} (one-sided)" if fm_p is not None else ""
         if ni and superior:
             call = "NON-INFERIOR"
             reason = (f"{trt} is non-inferior to {base} — and superior: effect {fmt(diff)} "
-                      f"(95% CI {fmt(lo)} to {fmt(hi)}) stays inside the {fmt(margin)} margin and excludes 0.")
+                      f"(95% CI {fmt(lo)} to {fmt(hi)}), inside the {fmt(margin)} margin and excludes 0{psuf}.")
         elif ni:
             call = "NON-INFERIOR"
             reason = (f"{trt} is non-inferior to {base}: effect {fmt(diff)} (95% CI {fmt(lo)} to {fmt(hi)}); "
-                      f"the {edge} bound {fmt(bound)} stays inside the {fmt(margin)} margin.")
+                      f"the {edge} bound {fmt(bound)} stays inside the {fmt(margin)} margin{psuf}.")
         else:
             call = "NOT NON-INFERIOR"
             reason = (f"Non-inferiority not shown: effect {fmt(diff)} (95% CI {fmt(lo)} to {fmt(hi)}) "
-                      f"crosses the {fmt(margin)} margin.")
+                      f"crosses the {fmt(margin)} margin{psuf}.")
 
         rows = [summ(base), summ(trt)]
         rows[0]["is_baseline"], rows[0]["is_winner"] = True, False
@@ -544,7 +554,8 @@ def fit_noninferiority(df: pd.DataFrame, group: str, outcome: str, margin: float
                          fit_stat=f"{test}; margin {fmt(margin)} ({'higher' if higher_is_better else 'lower'} is better)",
                          note="NI decision compares the 95% CI bound to the margin (one-sided α=0.025). Synthetic data.")
         mr.arms = sorted(rows, key=lambda r: r["value"], reverse=True)
-        mr.verdict = {"call": call, "reason": reason, "margin": margin, "higher_is_better": higher_is_better}
+        mr.verdict = {"call": call, "reason": reason, "margin": margin,
+                      "higher_is_better": higher_is_better, "fm_p": fm_p}
         mr.issues = issues
         return mr
     except Exception as e:  # noqa: BLE001
