@@ -462,6 +462,95 @@ def fit_experiment(df: pd.DataFrame, group: str, outcome: str, baseline: str | N
         return ModelResult("experiment", outcome, 0, "lift", error=str(e))
 
 
+def fit_noninferiority(df: pd.DataFrame, group: str, outcome: str, margin: float | None,
+                       higher_is_better: bool = True, control: str | None = None) -> ModelResult:
+    """Non-inferiority test — is the treatment NOT worse than control by more than `margin`?
+    Decision compares the two-sided 95% CI on (treatment − control) to the NI margin (one-sided α=0.025):
+    higher-is-better → NI if the lower CI bound > −margin; lower-is-better → NI if upper bound < +margin.
+    Also flags superiority when the CI additionally excludes zero in the favorable direction."""
+    try:
+        from . import guardrails as gr
+        if margin is None:
+            return ModelResult("noninferiority", outcome, 0, "difference",
+                               error="A non-inferiority margin is required (on the outcome's scale).")
+        margin = abs(float(margin))
+        d = _clean(df, [group, outcome])
+        d[group] = d[group].astype(str)
+        arms = list(d[group].unique())
+        if len(arms) != 2:
+            return ModelResult("noninferiority", outcome, len(d), "difference",
+                               error="Non-inferiority needs exactly two arms (treatment vs control).")
+        binary = _is_binary_outcome(d[outcome])
+        d = d.assign(_y=(_to_binary(d[outcome]) if binary else d[outcome].astype(float)).values)
+        base = control if control in arms else next(
+            (a for a in arms if a.lower() in _BASELINE_NAMES), d[group].value_counts().idxmax())
+        trt = next(a for a in arms if a != base)
+        st = {a: d.loc[d[group] == a, "_y"] for a in arms}
+
+        def summ(a):
+            v = st[a]
+            if binary:
+                k, n = int(v.sum()), int(len(v))
+                lo, hi = gr.wilson_ci(k, n)
+                return {"arm": a, "n": n, "value": (k / n if n else 0.0), "ci_low": lo, "ci_high": hi}
+            n = int(len(v))
+            m, se = float(v.mean()), (float(v.std(ddof=1)) / n ** 0.5 if n > 1 else 0.0)
+            return {"arm": a, "n": n, "value": m, "ci_low": m - 1.96 * se, "ci_high": m + 1.96 * se}
+
+        if binary:
+            kt, nt, kc, nc = int(st[trt].sum()), len(st[trt]), int(st[base].sum()), len(st[base])
+            diff, lo, hi = gr.newcombe_diff_ci(kt, nt, kc, nc)
+            test = "Newcombe CI on the risk difference"
+        else:
+            va, vb = st[trt].to_numpy(), st[base].to_numpy()
+            diff = float(va.mean() - vb.mean())
+            se = (va.var(ddof=1) / len(va) + vb.var(ddof=1) / len(vb)) ** 0.5
+            lo, hi = diff - 1.96 * se, diff + 1.96 * se
+            test = "Welch CI on the mean difference"
+
+        if higher_is_better:
+            ni, superior, bound = lo > -margin, lo > 0, lo
+        else:
+            ni, superior, bound = hi < margin, hi < 0, hi
+
+        def fmt(x):
+            return f"{x * 100:.1f}%" if binary else f"{x:.2f}"
+
+        edge = "lower" if higher_is_better else "upper"
+        if ni and superior:
+            call = "NON-INFERIOR"
+            reason = (f"{trt} is non-inferior to {base} — and superior: effect {fmt(diff)} "
+                      f"(95% CI {fmt(lo)} to {fmt(hi)}) stays inside the {fmt(margin)} margin and excludes 0.")
+        elif ni:
+            call = "NON-INFERIOR"
+            reason = (f"{trt} is non-inferior to {base}: effect {fmt(diff)} (95% CI {fmt(lo)} to {fmt(hi)}); "
+                      f"the {edge} bound {fmt(bound)} stays inside the {fmt(margin)} margin.")
+        else:
+            call = "NOT NON-INFERIOR"
+            reason = (f"Non-inferiority not shown: effect {fmt(diff)} (95% CI {fmt(lo)} to {fmt(hi)}) "
+                      f"crosses the {fmt(margin)} margin.")
+
+        rows = [summ(base), summ(trt)]
+        rows[0]["is_baseline"], rows[0]["is_winner"] = True, False
+        rows[1]["is_baseline"], rows[1]["is_winner"] = False, False   # NI ≠ "winner"; verdict says it all
+        issues = []
+        if binary and min(nt, nc) < 100:
+            issues.append(f"Small arm (n={min(nt, nc)}) — the CI is wide; the NI call is fragile.")
+        issues.append("NI is sensitive to the margin and analysis population — pre-specify the margin and "
+                      "prefer the per-protocol set.")
+
+        mr = ModelResult("noninferiority", outcome, len(d), "difference (treatment − control)",
+                         [Term(f"{trt} − {base}", diff, lo, hi, float("nan"))],
+                         fit_stat=f"{test}; margin {fmt(margin)} ({'higher' if higher_is_better else 'lower'} is better)",
+                         note="NI decision compares the 95% CI bound to the margin (one-sided α=0.025). Synthetic data.")
+        mr.arms = sorted(rows, key=lambda r: r["value"], reverse=True)
+        mr.verdict = {"call": call, "reason": reason, "margin": margin, "higher_is_better": higher_is_better}
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001
+        return ModelResult("noninferiority", outcome, 0, "difference", error=str(e))
+
+
 def render(r: ModelResult) -> str:
     if r.error:
         return f"model ({r.model_type}) could not be fit: {r.error}"
@@ -474,12 +563,12 @@ def render(r: ModelResult) -> str:
             lines.append(f"  last observed {hist[-1]['time'][:10]}: {hist[-1]['value']:.1f}")
         for p in fc[:3] + ([fc[-1]] if len(fc) > 3 else []):
             lines.append(f"  forecast {p['time'][:10]}: {p['value']:.1f}  [{p['lower']:.1f}, {p['upper']:.1f}]")
-    if r.model_type == "experiment":
-        binm = "conversion" in r.effect_label
+    if r.model_type in ("experiment", "noninferiority") and r.arms:
+        binm = all(0 <= a["value"] <= 1 for a in r.arms)
         if r.verdict:
             lines.append(f"  VERDICT: {r.verdict.get('call')} — {r.verdict.get('reason')}")
         for a in r.arms:
-            tag = " (control)" if a.get("is_baseline") else (" ← winner" if a.get("is_winner") else "")
+            tag = " (control)" if a.get("is_baseline") else (" ←" if a.get("is_winner") else "")
             val = f"{a['value'] * 100:.1f}%" if binm else f"{a['value']:.2f}"
             lines.append(f"  {a['arm']:16} n={a['n']:,}  {val}{tag}")
         for iss in r.issues:

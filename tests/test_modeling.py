@@ -136,6 +136,33 @@ def test_experiment_inconclusive():
     assert r.error is None and r.verdict["call"] == "INCONCLUSIVE"
 
 
+def test_noninferiority_concludes_and_fails():
+    rng = np.random.default_rng(11)
+    # treatment ~ control (within a generous margin) → NON-INFERIOR
+    ctrl = pd.DataFrame({"arm": "control", "resp": (rng.random(2500) < 0.60).astype(int)})
+    trt = pd.DataFrame({"arm": "treatment", "resp": (rng.random(2500) < 0.59).astype(int)})
+    r = modeling.fit_noninferiority(pd.concat([ctrl, trt]), "arm", "resp", margin=0.10,
+                                    higher_is_better=True)
+    assert r.error is None and r.model_type == "noninferiority"
+    assert r.verdict["call"] == "NON-INFERIOR"
+
+    # treatment clearly worse than control, beyond the margin → NOT non-inferior
+    trt2 = pd.DataFrame({"arm": "treatment", "resp": (rng.random(2500) < 0.45).astype(int)})
+    r2 = modeling.fit_noninferiority(pd.concat([ctrl, trt2]), "arm", "resp", margin=0.05,
+                                     higher_is_better=True)
+    assert r2.verdict["call"] == "NOT NON-INFERIOR"
+
+
+def test_noninferiority_lower_is_better():
+    rng = np.random.default_rng(12)
+    # adverse-event rate: treatment slightly lower than control, lower-is-better → NON-INFERIOR
+    ctrl = pd.DataFrame({"arm": "control", "ae": (rng.random(3000) < 0.20).astype(int)})
+    trt = pd.DataFrame({"arm": "treatment", "ae": (rng.random(3000) < 0.19).astype(int)})
+    r = modeling.fit_noninferiority(pd.concat([ctrl, trt]), "arm", "ae", margin=0.05,
+                                    higher_is_better=False)
+    assert r.error is None and r.verdict["call"] == "NON-INFERIOR"
+
+
 def test_to_binary():
     assert list(modeling._to_binary(pd.Series([True, False, True]))) == [1, 0, 1]
     assert list(modeling._to_binary(pd.Series([0, 1, 0]))) == [0, 1, 0]

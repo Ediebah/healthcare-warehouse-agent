@@ -291,6 +291,35 @@ def experiment_chart(model: dict):
     return _finish(alt.layer(bars, err, labels), 340, "Outcome by variant (95% CI)")
 
 
+def ni_plot(model: dict):
+    """Non-inferiority plot: the treatment−control effect with 95% CI, against the NI margin and zero.
+    Green point if non-inferior, red if not; gold dashed line = the margin, grey dotted = no difference."""
+    if not model or model.get("error") or not model.get("terms"):
+        return None
+    t = model["terms"][0]
+    v = model.get("verdict", {})
+    margin = v.get("margin")
+    if margin is None:
+        return None
+    refline = -margin if v.get("higher_is_better", True) else margin
+    ni = v.get("call") == "NON-INFERIOR"
+    d = pd.DataFrame([{"label": t["name"], "est": t["estimate"], "lo": t["ci_low"], "hi": t["ci_high"]}])
+    base = alt.Chart(d).encode(y=alt.Y("label:N", title=None))
+    x = alt.X("lo:Q", title="difference: treatment − control  (95% CI)", scale=alt.Scale(zero=False))
+    ci = base.mark_rule(color=MUTED, strokeWidth=2).encode(x=x, x2="hi:Q")
+    cap_lo = base.mark_tick(color=MUTED, thickness=2, size=10).encode(x="lo:Q")
+    cap_hi = base.mark_tick(color=MUTED, thickness=2, size=10).encode(x="hi:Q")
+    pt = base.mark_point(filled=True, size=180, color=TEAL if ni else "#f87171").encode(
+        x="est:Q", tooltip=["label", "est", "lo", "hi"])
+    zero = alt.Chart(pd.DataFrame({"x": [0.0]})).mark_rule(
+        color=MUTED, strokeDash=[2, 3]).encode(x="x:Q")
+    marg = alt.Chart(pd.DataFrame({"x": [refline], "t": ["NI margin"]}))
+    marg_line = marg.mark_rule(color="#f5c451", strokeWidth=2, strokeDash=[6, 3]).encode(x="x:Q")
+    marg_txt = marg.mark_text(color="#f5c451", dy=-70, fontSize=11).encode(x="x:Q", text="t:N")
+    chart = alt.layer(marg_line, zero, ci, cap_lo, cap_hi, pt, marg_txt).resolve_scale(x="shared")
+    return _finish(chart, 190, "Non-inferiority — effect vs the margin (gold) and no-difference (grey)")
+
+
 def radar_chart(df: pd.DataFrame, question: str = ""):
     """Radar/spider chart comparing a few entities across several metrics (each axis min-max
     normalized so scales are comparable). Appropriate ONLY for 2-6 entities × ≥3 numeric measures."""

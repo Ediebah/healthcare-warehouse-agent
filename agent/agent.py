@@ -214,7 +214,7 @@ _MODEL_HINT = re.compile(
     r"adjust|controlling for|confound|odds|hazard|survival|time.to|effect of|impact of|independent of|"
     r"regression|proportion of variance|forecast|projection|trend|over time|seasonal|"
     r"causal|treatment effect|uplift|a/b|ab test|experiment|variant|conversion|"
-    r"should we ship|ship it|ship the|roll ?out)", re.I)
+    r"should we ship|ship it|ship the|roll ?out|non.?inferior|noninferior|margin)", re.I)
 
 
 def _route(question: str, context: str) -> dict:
@@ -247,6 +247,14 @@ def _route(question: str, context: str) -> dict:
         "metric (binary converted, or continuous revenue). analytic_sql returns ONE ROW PER ASSIGNMENT "
         "from mart_experiments, filtered to a SINGLE experiment, e.g. `SELECT variant, converted FROM "
         "mart_experiments WHERE experiment = 'checkout_redesign'`.\n"
+        "  'noninferiority' a non-inferiority test — 'is treatment X non-inferior to control within a Y "
+        "margin'. Set `group`=the arm column, `outcome`=the endpoint, `margin`=the NI margin as a number "
+        "on the outcome's scale (a rate/proportion → a proportion, e.g. 10% → 0.10; 3-point → 0.03), and "
+        "`higher_is_better`=true when a HIGHER outcome is better (efficacy/response) or false when LOWER "
+        "is better (e.g. adverse-event or mortality rate). analytic_sql returns one row per subject with "
+        "the arm column + outcome, FILTERED to a SINGLE experiment so the arm column has EXACTLY TWO "
+        "values (treatment vs control), e.g. `SELECT variant, converted FROM mart_experiments WHERE "
+        "experiment = 'pricing_page'` with \"group\":\"variant\", \"outcome\":\"converted\".\n"
         "  'causal'      the EFFECT / IMPACT of a specific binary intervention or exposure (on a drug vs "
         "not, insured vs not, had-procedure vs not) on an outcome, adjusting for confounders → T-learner "
         "uplift. Needs `outcome`, a binary `treatment`, and `predictors` (the confounders). Binarize the "
@@ -260,7 +268,8 @@ def _route(question: str, context: str) -> dict:
         'Return JSON: {"mode":"model"|"aggregate", "model_type":"...", "outcome":"col", '
         '"predictors":["col"], "duration":"col", "event":"col", "group":"col", "var_a":"col", '
         '"var_b":"col", "time_col":"col", "value_col":"col", "periods":12, "seasonal_periods":12, '
-        '"treatment":"col", "analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. '
+        '"treatment":"col", "margin":0.1, "higher_is_better":true, '
+        '"analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. '
         'Plain aggregation → {"mode":"aggregate"}.',
     )
 
@@ -288,6 +297,9 @@ def _fit_model(spec: dict, df) -> modeling.ModelResult:
         return modeling.fit_uplift(df, spec["outcome"], spec["treatment"], spec.get("predictors", []))
     if mt == "experiment":
         return modeling.fit_experiment(df, spec["group"], spec["outcome"])
+    if mt == "noninferiority":
+        return modeling.fit_noninferiority(df, spec["group"], spec["outcome"], spec.get("margin"),
+                                           spec.get("higher_is_better", True), spec.get("control"))
     return modeling.ModelResult(mt or "?", spec.get("outcome", ""), 0, "", error=f"unknown model_type: {mt}")
 
 
@@ -308,6 +320,9 @@ def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
         "- experiment: LEAD with the ship / no-ship / inconclusive verdict, then the lift with its 95% CI "
         "and p (or FDR q if multiple variants), then any flagged issues (imbalance, multiple comparisons, "
         "underpowered). Be decisive but honest about uncertainty.\n"
+        "- noninferiority: LEAD with the non-inferior / not-non-inferior verdict, state the effect and its "
+        "95% CI relative to the margin, note if superiority also holds, and flag that NI depends on the "
+        "pre-specified margin and analysis population (per-protocol).\n"
         "Use markdown headers:\n"
         "**Findings** — what the model shows.\n"
         "**Recommendation** — one actionable point (optional).\n"

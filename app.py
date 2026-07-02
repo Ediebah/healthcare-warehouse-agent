@@ -33,6 +33,7 @@ from agent.charts import (
     forest_plot,
     importance_chart,
     kpi_cards,
+    ni_plot,
     radar_chart,
     survival_plot,
 )
@@ -56,9 +57,10 @@ EXAMPLE_GROUPS = {
         "Forecast monthly encounter volume for the next 12 months.",
         "What is the effect of insurance coverage on mortality, adjusting for age and income?",
     ],
-    "Experiments (A/B)": [
+    "Experiments & trials": [
         "Analyze the checkout redesign A/B test — should we ship it?",
         "Should we ship the aggressive upsell experiment?",
+        "Is the pricing-page variant non-inferior to control on conversion (3-point margin)?",
     ],
 }
 EXAMPLES = [q for qs in EXAMPLE_GROUPS.values() for q in qs]
@@ -287,8 +289,8 @@ def _render_model(m: dict) -> str:
     head = f"**{m['model_type'].upper()}** · outcome `{m['outcome']}` · n={m['n']:,}"
     if m.get("fit_stat"):
         head += f" · {m['fit_stat']}"
-    if m.get("model_type") == "experiment":                          # arms + lifts + flagged issues
-        binm = "conversion" in m.get("effect_label", "")
+    if m.get("model_type") in ("experiment", "noninferiority") and m.get("arms"):   # arms + issues
+        binm = all(0 <= a["value"] <= 1 for a in m["arms"])
         metric = "conversion" if binm else "mean"
         lines = [head, "", f"| variant | {metric} | 95% CI | n |", "|---|---|---|---|"]
         for a in m.get("arms", []):
@@ -363,10 +365,11 @@ if result is not None:
             st.markdown(f"<div class='cite'>tables used: {chips}</div>", unsafe_allow_html=True)
         eyebrow("Statistical model")
         _mt = result.model.get("model_type")
-        if _mt == "experiment":                          # A/B → ship/no-ship verdict badge first
+        if _mt in ("experiment", "noninferiority"):      # decision models → verdict badge first
             _v = result.model.get("verdict", {})
             _call = _v.get("call", "")
-            _color = {"SHIP": "#4fd1c5", "DO NOT SHIP": "#f87171",
+            _color = {"SHIP": "#4fd1c5", "NON-INFERIOR": "#4fd1c5",
+                      "DO NOT SHIP": "#f87171", "NOT NON-INFERIOR": "#f87171",
                       "INCONCLUSIVE": "#f5c451"}.get(_call, "#8ea0b0")
             st.markdown(
                 f"<div style='display:inline-block;border:2px solid {_color};color:{_color};"
@@ -374,9 +377,9 @@ if result is not None:
                 f"letter-spacing:.06em;margin:.2rem 0 .5rem'>{html.escape(_call)}</div>"
                 f"<div style='color:#cfe0ec;margin-bottom:.5rem;max-width:60ch'>"
                 f"{html.escape(_v.get('reason', ''))}</div>", unsafe_allow_html=True)
-            _ec = experiment_chart(result.model)
-            if _ec is not None:
-                st.altair_chart(_ec, use_container_width=True)
+            _dc = experiment_chart(result.model) if _mt == "experiment" else ni_plot(result.model)
+            if _dc is not None:
+                st.altair_chart(_dc, use_container_width=True)
         if result.model.get("km"):                       # survival → Kaplan-Meier curves
             st.altair_chart(survival_plot(result.model["km"]), use_container_width=True)
         if result.model.get("series"):                   # time-series → history + forecast
@@ -385,7 +388,8 @@ if result is not None:
             _imp = importance_chart(result.model)
             if _imp is not None:
                 st.altair_chart(_imp, use_container_width=True)
-        _fp = forest_plot(result.model)                  # regression/survival/causal → effect forest
+        # regression/survival/causal/experiment → effect forest (NI already shows it vs the margin)
+        _fp = forest_plot(result.model) if _mt != "noninferiority" else None
         if _fp is not None:
             st.altair_chart(_fp, use_container_width=True)
         st.markdown(_render_model(result.model))
