@@ -28,6 +28,7 @@ except Exception:
 from agent.agent import run_analysis
 from agent.charts import build_chart, kpi_cards
 from agent.llm import MODEL
+from agent.retrieval import load_catalog
 
 st.set_page_config(page_title="Clinical Insight Agent", page_icon="🩺",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -166,6 +167,27 @@ code, pre, kbd{ font-family:var(--font-mono) !important; }
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
+
+@st.cache_data(show_spinner=False)
+def _data_dictionary() -> str:
+    """Human-readable 'what data is available' from the semantic catalog — so users know the scope."""
+    tables = load_catalog()["tables"]
+    groups = {"Dimensions — who / what": "dim_", "Facts — events": "fct_", "Analytics — question-shaped": "mart_"}
+    lines = []
+    for label, prefix in groups.items():
+        items = [t for t in tables if t["name"].startswith(prefix)]
+        if not items:
+            continue
+        lines.append(f"**{label}**")
+        for t in items:
+            lines.append(f"- `{t['name']}` — {t['description'].split('.')[0][:110]}")
+        lines.append("")
+    lines.append("**You can ask for:** counts, rates, costs, averages, prevalence, comparisons by "
+                 "demographic (age / sex / race), or filter by a condition / medication name. "
+                 "Vague asks (e.g. *'show me the trends'*) get a clarifying question back.")
+    return "\n".join(lines)
+
+
 # ───────────────────────────── hero ─────────────────────────────
 st.markdown(f"""
 <div class="hero">
@@ -189,6 +211,9 @@ st.markdown(f"""
 # ───────────────────────────── ask ─────────────────────────────
 if "question" not in st.session_state:
     st.session_state.question = EXAMPLES[0]
+
+with st.expander("📋 What data can I ask about?"):
+    st.markdown(_data_dictionary())
 
 st.markdown("<div class='eyebrow'>Try one</div>", unsafe_allow_html=True)
 for start in range(0, len(EXAMPLES), 3):

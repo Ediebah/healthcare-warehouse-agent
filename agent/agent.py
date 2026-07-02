@@ -166,12 +166,15 @@ def _interpret(question: str, sql: str, df: pd.DataFrame, findings: list[guardra
     caveats = guardrails.render(findings)
     return llm.complete(
         _SYSTEM,
-        f"QUESTION: {question}\n\nSQL:\n{sql}\n\nRESULT (up to 30 rows, CSV):\n{preview}\n\n"
+        f"QUESTION: {question}\n\nSQL:\n{sql}\n\nRESULT ({len(df)} rows total; showing up to 30):\n{preview}\n\n"
         f"STATISTICAL CAVEATS (computed deterministically — you must respect these, do not overstate):\n"
         f"{caveats}\n\n"
-        "Write the answer in three short sections using markdown headers exactly:\n"
-        "**Findings** — 3-5 sentences on what the data shows.\n"
-        "**Recommendation** — one concrete, actionable recommendation.\n"
+        "Use the TOTAL row count above (not the shown sample) for any count you state.\n"
+        "Write the answer with these markdown headers:\n"
+        "**Findings** — 3-5 sentences on what the data shows. If this is just a list/catalog with no "
+        "metric (e.g. 'what conditions exist'), briefly say how many items and what kinds — don't over-analyze.\n"
+        "**Recommendation** — one concrete, actionable recommendation; OMIT this whole section if the "
+        "question is a plain lookup/list where a recommendation would be filler.\n"
         "**Statistical caveats** — restate the caveats above in plain language; never claim "
         "significance or causation the data can't support.",
         temperature=0.2,
