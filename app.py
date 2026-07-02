@@ -19,6 +19,7 @@ except Exception:
     pass  # no secrets.toml locally — falls back to agent/.env
 
 from agent.agent import run_analysis
+from agent.charts import build_chart
 from agent.llm import MODEL
 
 st.set_page_config(page_title="Clinical Insight Agent", page_icon="🩺",
@@ -233,6 +234,11 @@ if go and question:
 
     eyebrow(f"Result <span class='n'>· {result.n_rows} row(s)</span>")
     st.dataframe(result.dataframe, use_container_width=True, height=min(360, 80 + 28 * result.n_rows))
+
+    _chart = build_chart(result.dataframe, question)
+    if _chart is not None:
+        eyebrow("Visualization")
+        st.altair_chart(_chart, use_container_width=True)
 
     if result.verification:
         v = result.verification
