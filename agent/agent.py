@@ -15,8 +15,11 @@ Returns an AgentResult carrying the full trace so the UI can show its work.
 """
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 
@@ -24,18 +27,25 @@ from . import guardrails, llm, retrieval
 from .warehouse import QueryError, run_query
 
 MAX_SQL_TRIES = 4
+MAX_QUESTION_LEN = 2000
+_TRACE_LOG = Path(__file__).resolve().parent.parent / "logs" / "traces.jsonl"
 
 # Defense-in-depth: block obvious prompt-injection before spending any tokens. (The SQL layer is
 # already read-only + validated, so the blast radius is small; this stops instruction-override too.)
 _INJECTION = re.compile(
     r"(ignore (all |the )?(previous|above|prior)|disregard (the |your |all )?(previous|instruction|rule)|"
-    r"system prompt|you are now|reveal (your|the) (instructions|prompt|system)|"
-    r"print (your |the )?(instructions|prompt|system)|jailbreak|override (the |your )?(rules|instructions)|"
-    r"forget (your|the|all))", re.I)
+    r"system prompt|prompt injection|you are now|you must now|new (system )?instructions|"
+    r"reveal (your|the) (instructions|prompt|system)|print (your |the )?(instructions|prompt|system)|"
+    r"dump (your|the) (instructions|prompt|system)|jailbreak|developer mode|"
+    r"override (the |your )?(rules|instructions)|bypass (the |your )?(rules|guard|filter|instructions)|"
+    r"forget (your|the|all)|pretend (to be|you are))", re.I)
 
 
 def _looks_like_injection(q: str) -> bool:
-    return bool(_INJECTION.search(q or ""))
+    q = q or ""
+    if len(q) > MAX_QUESTION_LEN:        # absurdly long input — likely stuffing/exfiltration
+        return True
+    return bool(_INJECTION.search(q))
 
 _SYSTEM = (
     "You are a meticulous healthcare data analyst working over a dbt-modeled DuckDB warehouse "
@@ -180,6 +190,19 @@ def _degenerate(df) -> bool:
     return bool(nums) and all((pd.isna(v) or v == 0) for v in nums)
 
 
+def _persist_trace(question: str, trace: dict | None, error: str | None) -> None:
+    """Append each run's trace (tokens/latency/cost) to logs/traces.jsonl for observability."""
+    try:
+        _TRACE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": _dt.datetime.now().isoformat(timespec="seconds"),
+               "question": (question or "")[:200], "model": llm.MODEL, "error": bool(error),
+               **(trace or {})}
+        with _TRACE_LOG.open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
 def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
     result = AgentResult(question=question)
     llm.reset_trace()
@@ -242,6 +265,7 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
         result.error = str(e)
     finally:
         result.trace = llm.trace_summary()
+        _persist_trace(question, result.trace, result.error)
     return result
 
 

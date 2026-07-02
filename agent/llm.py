@@ -59,7 +59,9 @@ def _get_client():
                 "(then restart the app if it was already running)."
             )
         from openai import OpenAI
-        _client = OpenAI()
+        # max_retries → the SDK retries transient failures (429 rate-limit, 5xx, timeouts,
+        # connection errors) with exponential backoff; timeout caps a hung request.
+        _client = OpenAI(max_retries=4, timeout=40.0)
     return _client
 
 
@@ -72,7 +74,12 @@ def complete(system: str, user: str, *, json_mode: bool = False, temperature: fl
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
     t0 = time.perf_counter()
-    resp = _get_client().chat.completions.create(**kwargs)
+    try:
+        resp = _get_client().chat.completions.create(**kwargs)
+    except LLMError:
+        raise
+    except Exception as e:   # SDK already retried transient errors; surface the final failure cleanly
+        raise LLMError(f"LLM request failed: {type(e).__name__}: {e}") from e
     ms = (time.perf_counter() - t0) * 1000
     u = getattr(resp, "usage", None)
     _TRACE.append({
@@ -83,9 +90,12 @@ def complete(system: str, user: str, *, json_mode: bool = False, temperature: fl
     return resp.choices[0].message.content or ""
 
 
-def complete_json(system: str, user: str, temperature: float = 0.0) -> dict:
-    raw = complete(system, user, json_mode=True, temperature=temperature)
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise LLMError(f"Model did not return valid JSON: {e}\n---\n{raw[:500]}") from e
+def complete_json(system: str, user: str, temperature: float = 0.0, retries: int = 2) -> dict:
+    last = ""
+    for _ in range(retries + 1):
+        raw = complete(system, user, json_mode=True, temperature=temperature)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            last = raw            # occasionally the model returns prose in JSON mode — try again
+    raise LLMError(f"Model did not return valid JSON after {retries + 1} tries.\n---\n{last[:500]}")
