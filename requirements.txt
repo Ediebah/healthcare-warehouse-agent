@@ -10,3 +10,6 @@ pandas==3.0.3
 numpy==2.5.0
 altair==6.2.2
 duckdb==1.5.4
+scipy==1.18.0
+statsmodels==0.14.6
+patsy==1.0.2

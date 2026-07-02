@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import guardrails, llm, retrieval
+from . import guardrails, llm, modeling, retrieval
 from .warehouse import QueryError, run_query
 
 MAX_SQL_TRIES = 4
@@ -82,6 +82,7 @@ class AgentResult:
     citations: list[str] = field(default_factory=list)        # catalog tables the SQL used
     findings: list[guardrails.Finding] = field(default_factory=list)
     verification: dict | None = None                          # {answers_question, confidence, issues}
+    model: dict | None = None                                 # inferential model result (ModelResult.as_dict)
     interpretation: str = ""
     trace: dict | None = None                                 # {calls, tokens, latency_ms, est_cost_usd}
     error: str | None = None
@@ -206,6 +207,86 @@ def _persist_trace(question: str, trace: dict | None, error: str | None) -> None
         pass
 
 
+# Questions that likely need an inferential MODEL rather than a plain aggregation.
+# No trailing \b — must match inflections (predict-s, adjust-ing, associat-ed, correlat-ion).
+_MODEL_HINT = re.compile(
+    r"\b(predict|risk factor|associat|correlat|adjust|controlling for|confound|odds|hazard|"
+    r"survival|time.to|effect of|independent of|regression|proportion of variance)", re.I)
+
+
+def _route(question: str, context: str) -> dict:
+    """Spec an inferential model + the analytic SQL (called only when the question looks inferential)."""
+    return llm.complete_json(
+        _SYSTEM,
+        f"{context}\n\nQUESTION: {question}\n\n"
+        "Decide if this needs an INFERENTIAL STATISTICAL MODEL (adjusted effects / risk factors / "
+        "controlling for confounders / odds or hazard ratios / survival time-to-event / an association "
+        "between two variables) rather than a plain count/rate/cost aggregation.\n"
+        "If it does, pick a model and write a read-only DuckDB SELECT returning ONE ROW PER UNIT (per "
+        "patient or encounter) with the outcome + predictor columns, each aliased to a simple snake_case "
+        "name (cast booleans to int).\n"
+        "model_type: 'logistic' (binary outcome e.g. readmission/deceased), 'ols' (continuous outcome "
+        "e.g. cost/age), 'cox' (time-to-event; needs duration + event columns), 'association' (two vars).\n"
+        'Return JSON: {"mode":"model"|"aggregate", "model_type":"...", "outcome":"col", '
+        '"predictors":["col"], "duration":"col", "event":"col", "var_a":"col", "var_b":"col", '
+        '"analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. Plain aggregation → {"mode":"aggregate"}.',
+    )
+
+
+def _fit_model(spec: dict, df) -> modeling.ModelResult:
+    mt = spec.get("model_type")
+    if mt == "logistic":
+        return modeling.fit_logistic(df, spec["outcome"], spec.get("predictors", []))
+    if mt == "ols":
+        return modeling.fit_ols(df, spec["outcome"], spec.get("predictors", []))
+    if mt == "cox":
+        return modeling.fit_cox(df, spec["duration"], spec["event"], spec.get("predictors", []))
+    if mt == "association":
+        return modeling.test_association(df, spec["var_a"], spec["var_b"])
+    return modeling.ModelResult(mt or "?", spec.get("outcome", ""), 0, "", error=f"unknown model_type: {mt}")
+
+
+def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
+    return llm.complete(
+        _SYSTEM,
+        f"QUESTION: {question}\n\nYou fit a {mr.model_type} model. Results:\n{modeling.render(mr)}\n\n"
+        "Explain in 3-5 sentences: interpret the key effect estimates (odds/hazard ratios or "
+        "coefficients) WITH their 95% CIs and p-values; say which are significant; stress they are "
+        "ADJUSTED (each holds the others fixed). Use markdown headers:\n"
+        "**Findings** — what the model shows.\n"
+        "**Recommendation** — one actionable point (optional).\n"
+        "**Model caveats** — association is not causation; model assumptions (proportional hazards / "
+        "linearity); small samples widen CIs; the data is synthetic.",
+        temperature=0.2,
+    )
+
+
+def _run_model(question: str, context: str, spec: dict, result: AgentResult, table_names: list[str]) -> AgentResult:
+    sql = _clean_sql(spec.get("analytic_sql", ""))
+    result.hypothesis = spec.get("hypothesis", "")
+    df = None
+    for attempt in range(1, MAX_SQL_TRIES + 1):
+        try:
+            df = run_query(sql, max_rows=100000)      # a model needs the full analytic dataset, not 1000 rows
+            result.attempts.append({"sql": sql, "error": None})
+            break
+        except QueryError as e:
+            result.attempts.append({"sql": sql, "error": str(e)})
+            if attempt == MAX_SQL_TRIES:
+                result.sql = sql
+                result.error = f"Analytic SQL failed: {e}"
+                return result
+            sql = _fix_sql(question, context, sql, str(e))
+    result.sql = sql
+    result.dataframe = df
+    result.citations = _citations(sql, table_names)
+    mr = _fit_model(spec, df)
+    result.model = mr.as_dict()
+    result.interpretation = (f"**Findings**\nThe model could not be fit: {mr.error}"
+                             if mr.error else _interpret_model(question, mr))
+    return result
+
+
 def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
     result = AgentResult(question=question)
     llm.reset_trace()
@@ -216,6 +297,13 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES) -> AgentResult:
     try:
         retrieved = retrieval.retrieve(question)
         context = retrieval.render_context(retrieved)
+
+        # Inferential questions → fit a real model. Checked BEFORE triage so a specific model
+        # question ("what predicts X adjusting for Y") isn't clarified away as vague.
+        if _MODEL_HINT.search(question):
+            spec = _route(question, context)
+            if spec.get("mode") == "model" and spec.get("analytic_sql"):
+                return _run_model(question, context, spec, result, retrieved["all_table_names"])
 
         triage = _triage(question, context)
         if not triage.get("answerable", True) and triage.get("clarification"):

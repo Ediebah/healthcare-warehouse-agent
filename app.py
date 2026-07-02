@@ -38,7 +38,7 @@ EXAMPLES = [
     "What is the 30-day readmission rate, and does it vary by age group?",
     "What is the prevalence of hypertension by age group?",
     "How does average encounter cost differ by encounter class?",
-    "Which conditions are most prevalent in patients 75 and older?",
+    "What predicts 30-day readmission, adjusting for age and sex?",
 ]
 
 # ───────────────────────────── design system ─────────────────────────────
@@ -252,6 +252,24 @@ def _log_feedback(result, question: str, thumbs: str, correction: str) -> None:
         pass
 
 
+def _render_model(m: dict) -> str:
+    """Render an inferential model result (from AgentResult.model) as a markdown table."""
+    if m.get("error"):
+        return f"⚠ The model could not be fit: {m['error']}"
+    head = f"**{m['model_type'].upper()}** · outcome `{m['outcome']}` · n={m['n']:,}"
+    if m.get("fit_stat"):
+        head += f" · {m['fit_stat']}"
+    lines = [head, "", f"| term | {m['effect_label']} | 95% CI | p-value |", "|---|---|---|---|"]
+    for t in m["terms"]:
+        lo = t["ci_low"]
+        ci = "—" if lo != lo else f"[{lo:.3f}, {t['ci_high']:.3f}]"     # lo != lo  →  NaN
+        star = " ✳️" if t["p"] < 0.05 else ""
+        lines.append(f"| `{t['name']}` | {t['estimate']:.3f} | {ci} | {t['p']:.4f}{star} |")
+    if m.get("note"):
+        lines.append(f"\n_{m['note']}_")
+    return "\n".join(lines)
+
+
 # ───────────────────────────── run ─────────────────────────────
 if go and question:
     with st.spinner("Retrieving context → planning → writing SQL → executing → interpreting…"):
@@ -270,6 +288,37 @@ if result is not None:
 
     if result.error and result.dataframe is None and not result.attempts:
         st.error(result.error)
+        st.stop()
+
+    # ───────── inferential model view (adjusted effects) ─────────
+    if result.model is not None:
+        if result.hypothesis:
+            eyebrow("Hypothesis")
+            st.markdown(f"<div class='card hypo'>{html.escape(result.hypothesis)}</div>",
+                        unsafe_allow_html=True)
+        eyebrow("Analytic query")
+        st.code(result.sql, language="sql")
+        if result.citations:
+            chips = "".join(f"<span class='pill'>{html.escape(t)}</span>" for t in result.citations)
+            st.markdown(f"<div class='cite'>tables used: {chips}</div>", unsafe_allow_html=True)
+        eyebrow("Statistical model")
+        st.markdown(_render_model(result.model))
+        eyebrow("Interpretation & recommendation")
+        st.markdown(result.interpretation)
+        if result.dataframe is not None:
+            with st.expander(f"analytic data · {result.n_rows} rows"):
+                st.dataframe(result.dataframe, use_container_width=True)
+        if result.trace:
+            t = result.trace
+            toks = t.get("prompt_tokens", 0) + t.get("completion_tokens", 0)
+            st.markdown(f"<div class='trace'>⏱ {t.get('latency_ms', 0)} ms · {t.get('calls', 0)} LLM calls · "
+                        f"{toks:,} tokens · est. ${t.get('est_cost_usd', 0):.4f}</div>", unsafe_allow_html=True)
+        eyebrow("Was this useful?")
+        _c = st.columns([1, 1, 8])
+        _up, _down = _c[0].button("👍", key="fb_up"), _c[1].button("👎", key="fb_down")
+        if _up or _down:
+            _log_feedback(result, result_q, "up" if _up else "down", "")
+            st.success("Thanks — logged as the human-in-the-loop signal.")
         st.stop()
 
     # HITL review gate — flag low-confidence / caution answers for human review before acting
