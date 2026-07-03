@@ -232,7 +232,6 @@ st.markdown("""
     <span class="pill">non-inferiority · sample size</span>
     <span class="pill">VIF · PH · assumption checks</span>
     <span class="pill">Wilson CIs · FDR</span>
-    <span class="pill">regulated .docx report</span>
   </div>
   <div class="meta">OpenAI <span class="dot">·</span> DuckDB (Synthea, synthetic)
     <span class="dot">·</span> read-only, row-capped</div>
@@ -293,8 +292,8 @@ else:
     st.markdown("<div class='eyebrow'>Try one — the agent auto-selects the method</div>",
                 unsafe_allow_html=True)
     for _group, _qs in EXAMPLE_GROUPS.items():
-        st.markdown(f"<div style='color:#8ea0b0;font-size:.78rem;font-weight:600;letter-spacing:.02em;"
-                    f"margin:.55rem 0 .25rem'>{_group}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='color:var(--accent);font-size:.98rem;font-weight:700;"
+                    f"letter-spacing:.01em;margin:1rem 0 .4rem'>{_group}</div>", unsafe_allow_html=True)
         for start in range(0, len(_qs), 3):
             cols = st.columns(3)
             for c, ex in zip(cols, _qs[start:start + 3]):
