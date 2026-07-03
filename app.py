@@ -225,11 +225,13 @@ st.markdown("""
   non-inferiority, causal, or ML), checks the assumptions (proportional hazards, separation, VIF), and
   reports the result with the caveats a text-to-SQL bot skips — exportable as a regulated-style report.</p>
   <div class="pill-row">
+    <span class="pill">dbt star schema</span>
+    <span class="pill">RAG semantic catalog</span>
+    <span class="pill">self-healing SQL</span>
     <span class="pill">survival · regression · causal</span>
     <span class="pill">non-inferiority · sample size</span>
     <span class="pill">VIF · PH · assumption checks</span>
     <span class="pill">Wilson CIs · FDR</span>
-    <span class="pill">self-healing SQL</span>
     <span class="pill">regulated .docx report</span>
   </div>
   <div class="meta">OpenAI <span class="dot">·</span> DuckDB (Synthea, synthetic)
@@ -303,16 +305,32 @@ def eyebrow(text: str):
     st.markdown(f"<div class='eyebrow'>{text}</div>", unsafe_allow_html=True)
 
 
+def _result_key(result) -> str:
+    """Content hash of a result — the report cache is keyed on THIS, never on the question text, so a
+    cross-session cache hit can only mean identical content (no leak of one user's uploaded data)."""
+    import hashlib
+    parts = [result.question or "", getattr(result, "hypothesis", "") or "", result.sql or "",
+             getattr(result, "interpretation", "") or "",
+             json.dumps(result.model or {}, default=str, sort_keys=True)]
+    df = getattr(result, "dataframe", None)
+    if df is not None:
+        try:
+            parts.append(str(int(pd.util.hash_pandas_object(df, index=True).sum())))
+        except Exception:  # noqa: BLE001
+            parts.append(str(df.shape))
+    return hashlib.sha256("||".join(parts).encode()).hexdigest()
+
+
 @st.cache_data(show_spinner=False, max_entries=8)
-def _cached_report(_result, cache_key: str):
+def _cached_report(_result, content_key: str):   # keyed on content_key (a content hash), not the question
     from agent.report import build_docx
     return build_docx(_result)
 
 
-def _report_button(result, result_q: str, view: str):
-    """Offer the analysis as a regulated-style .docx report (cached so charts render once)."""
+def _report_button(result, view: str):
+    """Offer the analysis as a regulated-style .docx report (cached by content so charts render once)."""
     try:
-        data = _cached_report(result, result_q)
+        data = _cached_report(result, _result_key(result))
     except Exception as _e:  # noqa: BLE001
         st.caption(f"Report export unavailable: {_e}")
         return
@@ -466,7 +484,7 @@ if result is not None:
         st.markdown(_render_model(result.model))
         eyebrow("Interpretation & recommendation")
         st.markdown(result.interpretation)
-        _report_button(result, result_q, "model")
+        _report_button(result, "model")
         if result.dataframe is not None:
             with st.expander(f"analytic data · {result.n_rows} rows"):
                 st.dataframe(result.dataframe, use_container_width=True)
@@ -561,7 +579,7 @@ if result is not None:
 
     eyebrow("Interpretation & recommendation")
     st.markdown(result.interpretation)
-    _report_button(result, result_q, "agg")
+    _report_button(result, "agg")
 
     if result.trace:
         t = result.trace

@@ -79,12 +79,14 @@ def _reduce_collinearity(d: pd.DataFrame, predictors: list[str], vif_max: float 
     other = [p for p in predictors if p not in num]
     if len(num) < 2:
         return list(predictors), []
+    dnum = d[num].astype(float)
+    dnum = dnum.fillna(dnum.median())              # median-fill for the VIF/corr math (works pre-imputation)
     keep, dropped = list(num), []
     try:
         from statsmodels.stats.outliers_influence import variance_inflation_factor
         from statsmodels.tools.tools import add_constant
         while len(keep) > 1:
-            x = add_constant(d[keep].astype(float), has_constant="add").to_numpy()
+            x = add_constant(dnum[keep], has_constant="add").to_numpy()
             vifs = [(keep[i], variance_inflation_factor(x, i + 1)) for i in range(len(keep))]
             name, v = max(vifs, key=lambda kv: kv[1] if np.isfinite(kv[1]) else float("inf"))
             if np.isfinite(v) and v <= vif_max:
@@ -92,7 +94,7 @@ def _reduce_collinearity(d: pd.DataFrame, predictors: list[str], vif_max: float 
             keep.remove(name)
             dropped.append((name, v))
     except Exception:  # noqa: BLE001 — fall back to greedy pairwise-correlation pruning
-        cm = d[num].corr().abs()
+        cm = dnum.corr().abs()
         changed = True
         while changed and len(keep) > 1:
             changed = False
@@ -106,7 +108,7 @@ def _reduce_collinearity(d: pd.DataFrame, predictors: list[str], vif_max: float 
 
 
 def _prepare(df: pd.DataFrame, outcome_cols: list[str], predictors: list[str], vif_max: float = 10.0,
-             max_missing: float = 0.10, dominance: float = 0.99):
+             max_missing: float = 0.10, dominance: float = 0.99, impute: bool = True):
     """Comprehensive pre-modeling data engineering, with a transparent record of every step:
       1. drop rows with a missing OUTCOME (a supervised target can't be imputed);
       2. drop predictors with > max_missing missing (default 10%);
@@ -141,20 +143,21 @@ def _prepare(df: pd.DataFrame, outcome_cols: list[str], predictors: list[str], v
                      + ("…" if len(quasi) > 6 else "") + ".")
         preds = [p for p in preds if p not in quasi]
 
-    imputed = []                                       # 4. impute remaining missingness
-    for p in preds:
-        miss = int(d[p].isna().sum())
-        if miss > 0:
-            if pd.api.types.is_numeric_dtype(d[p]):
-                d[p] = d[p].fillna(d[p].median()); how = "median"
-            else:
-                mode = d[p].mode(dropna=True)
-                d[p] = d[p].fillna(mode.iloc[0] if len(mode) else "missing"); how = "mode"
-            imputed.append(f"{p} ({miss} by {how})")
-    if imputed:
-        steps.append("Imputed missing values (single imputation): " + ", ".join(imputed[:6])
-                     + (f", +{len(imputed) - 6} more" if len(imputed) > 6 else "")
-                     + " — for confirmatory analysis prefer multiple imputation with pooling.")
+    if impute:                                         # 4. impute remaining missingness
+        imputed = []                                   # (skipped when a downstream pipeline imputes per-fold)
+        for p in preds:
+            miss = int(d[p].isna().sum())
+            if miss > 0:
+                if pd.api.types.is_numeric_dtype(d[p]):
+                    d[p] = d[p].fillna(d[p].median()); how = "median"
+                else:
+                    mode = d[p].mode(dropna=True)
+                    d[p] = d[p].fillna(mode.iloc[0] if len(mode) else "missing"); how = "mode"
+                imputed.append(f"{p} ({miss} by {how})")
+        if imputed:
+            steps.append("Imputed missing values (single imputation): " + ", ".join(imputed[:6])
+                         + (f", +{len(imputed) - 6} more" if len(imputed) > 6 else "")
+                         + " — for confirmatory analysis prefer multiple imputation with pooling.")
 
     kept, dropped = _reduce_collinearity(d, preds, vif_max)   # 5. multicollinearity
     if dropped:
@@ -162,7 +165,10 @@ def _prepare(df: pd.DataFrame, outcome_cols: list[str], predictors: list[str], v
         steps.append(f"Removed {len(dropped)} collinear predictor(s) (VIF>{vif_max:.0f}): {parts}. "
                      "Each is redundant with a retained predictor; the retained set is identifiable.")
 
-    d = d.dropna(subset=[c for c in [*outcome_cols, *kept] if c in d.columns])
+    if impute:
+        d = d.dropna(subset=[c for c in [*outcome_cols, *kept] if c in d.columns])
+    else:
+        d = d.dropna(subset=[c for c in outcome_cols if c in d.columns])   # keep predictor NaN for the pipeline
     return d, kept, steps
 
 
@@ -416,11 +422,12 @@ def fit_forest(df: pd.DataFrame, outcome: str, predictors: list[str]) -> ModelRe
     Classifier for a binary outcome (scored by AUC), regressor for a continuous one (scored by R²)."""
     try:
         from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.impute import SimpleImputer
         from sklearn.inspection import permutation_importance
-        from sklearn.metrics import r2_score, roc_auc_score
-        from sklearn.model_selection import train_test_split
+        from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
+        from sklearn.pipeline import Pipeline
         preds0 = [p for p in predictors if p in df.columns and p != outcome]
-        d, preds, issues = _prepare(df, [outcome], preds0)   # complete-case + drop collinear predictors
+        d, preds, issues = _prepare(df, [outcome], preds0, impute=False)   # impute inside the CV pipeline
         if len(d) < 40 or len(preds) < 2:
             return ModelResult("forest", outcome, len(d), "importance",
                                error="Need ≥40 rows and ≥2 non-collinear predictors for a random forest.")
@@ -432,18 +439,22 @@ def fit_forest(df: pd.DataFrame, outcome: str, predictors: list[str]) -> ModelRe
             if y.nunique() < 2:
                 return ModelResult("forest", outcome, len(d), "importance",
                                    error="Outcome has no variation (all one class).")
-            model, scoring = RandomForestClassifier(**common), "roc_auc"
+            est = RandomForestClassifier(class_weight="balanced", **common)
+            scoring, metric = "roc_auc", "AUC"
+            cv = StratifiedKFold(5, shuffle=True, random_state=0)
         else:
             y = d[outcome].astype(float)
-            model, scoring = RandomForestRegressor(**common), "r2"
+            est = RandomForestRegressor(**common)
+            scoring, metric = "r2", "R²"
+            cv = KFold(5, shuffle=True, random_state=0)
+        pipe = Pipeline([("impute", SimpleImputer(strategy="median")), ("model", est)])
+        cvs = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)      # cross-validated skill
+        fit_stat = f"{metric}={cvs.mean():.3f}±{cvs.std():.3f} (5-fold CV)"
+        # permutation importance on a held-out split — imputer fit on train only (no leakage)
         Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0,
                                               stratify=y if is_class else None)
-        model.fit(Xtr, ytr)
-        if is_class:
-            fit_stat = f"AUC={roc_auc_score(yte, model.predict_proba(Xte)[:, 1]):.3f}"
-        else:
-            fit_stat = f"R²={r2_score(yte, model.predict(Xte)):.3f}"
-        imp = permutation_importance(model, Xte, yte, n_repeats=12, random_state=0, scoring=scoring)
+        pipe.fit(Xtr, ytr)
+        imp = permutation_importance(pipe, Xte, yte, n_repeats=12, random_state=0, scoring=scoring)
         means = pd.Series(imp.importances_mean, index=X.columns)
         terms = []                                  # roll one-hot columns back up to the source predictor
         for p in preds:
@@ -452,9 +463,9 @@ def fit_forest(df: pd.DataFrame, outcome: str, predictors: list[str]) -> ModelRe
                               float("nan"), float("nan"), float("nan")))
         terms.sort(key=lambda t: t.estimate, reverse=True)
         mr = ModelResult("forest", outcome, len(d), "importance", terms, fit_stat=fit_stat,
-                         note="Permutation importance on a collinearity-screened predictor set = how much "
-                              "model skill drops when a feature is shuffled (bigger = more predictive). "
-                              "Predictive, not causal.")
+                         note="5-fold cross-validated skill; permutation importance on a held-out split "
+                              "with imputation fit inside a scikit-learn pipeline (no leakage). Predictive, "
+                              "not causal.")
         mr.issues = issues
         return mr
     except Exception as e:  # noqa: BLE001
@@ -525,6 +536,8 @@ def fit_uplift(df: pd.DataFrame, outcome: str, treatment: str,
             X = pd.DataFrame({"_const": np.ones(len(d))}, index=d.index)
         make = RandomForestClassifier if is_class else RandomForestRegressor
         kw = dict(n_estimators=300, random_state=0, n_jobs=-1, min_samples_leaf=5)
+        if is_class:
+            kw["class_weight"] = "balanced"
         if is_class and (y[t == 1].nunique() < 2 or y[t == 0].nunique() < 2):
             return ModelResult("causal", outcome, len(d), "uplift",
                                error="Outcome has no variation within a treatment arm.")
