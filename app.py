@@ -46,27 +46,25 @@ st.set_page_config(page_title="Clinical Insight Agent", page_icon="🩺",
                    layout="wide", initial_sidebar_state="collapsed")
 
 EXAMPLE_GROUPS = {
-    "Explore & aggregate": [
-        "Which chronic conditions drive the highest total encounter cost?",
-        "What is the 30-day readmission rate, and does it vary by age group?",
-        "What is the prevalence of hypertension by age group?",
-        "How does average encounter cost differ by encounter class?",
-    ],
-    "Statistical models": [
-        "What predicts 30-day readmission, adjusting for age and sex?",
+    "Clinical inference & modeling": [
         "How does patient survival differ by sex?",
         "What are the strongest risk factors for patient mortality?",
-        "Forecast monthly encounter volume for the next 12 months.",
+        "What predicts 30-day readmission, adjusting for age and sex?",
         "What is the effect of insurance coverage on mortality, adjusting for age and income?",
     ],
-    "Experiments & trials": [
-        "Analyze the checkout redesign A/B test — should we ship it?",
+    "Clinical trials — non-inferiority": [
         "Is the new antibiotic non-inferior to standard of care on cure rate (10-point margin)?",
         "Is the new device non-inferior to standard of care on cure rate (10-point margin)?",
     ],
-    "Trial design (no data — power / sample size)": [
+    "Trial design — power & sample size": [
         "How many patients per arm to detect a 10-point rise in cure rate from 70%, at 80% power?",
         "Sample size for a non-inferiority trial: 85% control cure rate, 10-point margin, 90% power?",
+    ],
+    "Operational & product analytics": [
+        "Which chronic conditions drive the highest total encounter cost?",
+        "What is the 30-day readmission rate, and does it vary by age group?",
+        "Forecast monthly encounter volume for the next 12 months.",
+        "Analyze the checkout redesign A/B test — should we ship it?",
     ],
 }
 EXAMPLES = [q for qs in EXAMPLE_GROUPS.values() for q in qs]
@@ -221,19 +219,20 @@ def _data_dictionary() -> str:
 # ───────────────────────────── hero ─────────────────────────────
 st.markdown(f"""
 <div class="hero">
-  <div class="hero-eyebrow">Healthcare analytics · agentic AI</div>
+  <div class="hero-eyebrow">AI-native biostatistics · clinical data</div>
   <h1 class="hero-title">Clinical Insight <span class="accent">Agent</span></h1>
-  <p class="hero-sub">A self-serve data product. Ask in plain English — the agent retrieves schema
-  &amp; metric context, writes and self-corrects SQL over a dbt-modeled warehouse, then picks the right
-  method: aggregation, regression, survival, forecasting, causal inference, or an A/B ship-call — each
-  with the statistical caveats a text-to-SQL bot misses.</p>
+  <p class="hero-sub">Biostatistician-grade analysis, run by an AI agent over a clinical data warehouse.
+  Ask in plain English — it engineers the data (missingness, collinearity), fits the right model
+  (survival, regression, non-inferiority, causal), checks the assumptions (proportional hazards,
+  separation, VIF), and reports the result with the caveats a text-to-SQL bot skips — exportable as a
+  regulated-style report.</p>
   <div class="pill-row">
-    <span class="pill">dbt star schema</span>
-    <span class="pill">RAG semantic catalog</span>
+    <span class="pill">survival · regression · causal</span>
+    <span class="pill">non-inferiority · sample size</span>
+    <span class="pill">VIF · PH · assumption checks</span>
+    <span class="pill">Wilson CIs · FDR</span>
     <span class="pill">self-healing SQL</span>
-    <span class="pill">regression · survival · forecast</span>
-    <span class="pill">A/B ship-calls</span>
-    <span class="pill">Wilson CIs · small-N</span>
+    <span class="pill">regulated .docx report</span>
   </div>
   <div class="meta">model {html.escape(MODEL)} <span class="dot">·</span> DuckDB (Synthea, synthetic)
     <span class="dot">·</span> read-only, row-capped</div>

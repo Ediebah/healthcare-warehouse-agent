@@ -1,11 +1,15 @@
-# AI Data Scientist over a Healthcare Warehouse
+# Clinical Insight Agent — AI-native biostatistics over a clinical data warehouse
 
-An AI agent that does **end-to-end data science over a dbt-modeled healthcare warehouse**: ask a
-natural-language question, and the agent retrieves the right schema/metric context, forms a
-hypothesis, writes and runs SQL against a modeled warehouse, **self-corrects on errors**,
-interprets the result, and drafts a recommendation — **with statistical caveats a generic
-text-to-SQL bot misses** (small samples, confidence intervals, multiple comparisons, base-rate
-traps).
+**Biostatistician-grade analysis, run by an AI agent.** Ask a natural-language question over a
+dbt-modeled clinical warehouse and the agent retrieves the right schema/metric context, **engineers
+the data** (missingness, quasi-constant and collinear predictors), **fits the appropriate model**
+(survival, adjusted regression, non-inferiority, causal), **checks the assumptions** (proportional
+hazards, separation, VIF, linearity), and reports the result — **with the statistical caveats a
+generic text-to-SQL bot misses** — exportable as a **regulated-style Word report**.
+
+Built by a biostatistician: the differentiator isn't the LLM, it's the **statistical judgment
+encoded around it** — the pre-modeling data engineering, the assumption diagnostics, and a
+deterministic guardrail (CIs, multiplicity correction, confounding) that a text-to-SQL bot skips.
 
 Built on synthetic EHR data (zero PHI), so the whole thing is public and reproducible.
 
