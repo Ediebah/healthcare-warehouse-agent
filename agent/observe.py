@@ -34,23 +34,46 @@ def _pct(xs: list[float], q: float) -> float:
     return xs[min(len(xs) - 1, int(q * len(xs)))]
 
 
-def main() -> int:
-    traces, audit = _load(TRACES), _load(AUDIT)
+def load_traces() -> list[dict]:
+    return _load(TRACES)
+
+
+def load_audit() -> list[dict]:
+    return _load(AUDIT)
+
+
+def summary(traces: list[dict] | None = None, audit: list[dict] | None = None) -> dict:
+    """The production numbers you'd watch: run count, error/success rate, latency p50/p95, tokens, spend."""
+    traces = load_traces() if traces is None else traces
+    audit = load_audit() if audit is None else audit
+    s = {"runs": len(traces), "audited": len(audit)}
     if not traces:
-        print("No traces yet — run some analyses first (agent.agent / the app), then re-run.")
-        return 0
+        return s
     lat = [t.get("latency_ms", 0) for t in traces]
     toks = [t.get("prompt_tokens", 0) + t.get("completion_tokens", 0) for t in traces]
     cost = sum(t.get("est_cost_usd", 0.0) for t in traces)
     errs = sum(1 for t in traces if t.get("error"))
+    s.update({
+        "errors": errs, "error_rate": errs / len(traces), "success_rate": 1 - errs / len(traces),
+        "p50_ms": _pct(lat, 0.5), "p95_ms": _pct(lat, 0.95), "max_ms": max(lat) if lat else 0,
+        "avg_tokens": sum(toks) // max(1, len(toks)), "total_tokens": sum(toks),
+        "spend_usd": cost, "avg_cost_usd": cost / len(traces),
+    })
+    return s
 
+
+def main() -> int:
+    s = summary()
+    if not s["runs"]:
+        print("No traces yet — run some analyses first (agent.agent / the app), then re-run.")
+        return 0
     print("── agent observability ──────────────────────────")
-    print(f"  runs              : {len(traces)}")
-    print(f"  error rate        : {errs}/{len(traces)} = {errs/len(traces):.0%}")
-    print(f"  latency ms        : p50={_pct(lat,0.5):.0f}  p95={_pct(lat,0.95):.0f}  max={max(lat):.0f}")
-    print(f"  tokens / run      : avg={sum(toks)//len(toks):,}")
-    print(f"  est. spend        : ${cost:.3f}  (avg ${cost/len(traces):.4f}/run)")
-    print(f"  queries audited   : {len(audit)}")
+    print(f"  runs              : {s['runs']}")
+    print(f"  error rate        : {s['errors']}/{s['runs']} = {s['error_rate']:.0%}")
+    print(f"  latency ms        : p50={s['p50_ms']:.0f}  p95={s['p95_ms']:.0f}  max={s['max_ms']:.0f}")
+    print(f"  tokens / run      : avg={s['avg_tokens']:,}")
+    print(f"  est. spend        : ${s['spend_usd']:.3f}  (avg ${s['avg_cost_usd']:.4f}/run)")
+    print(f"  queries audited   : {s['audited']}")
     return 0
 
 

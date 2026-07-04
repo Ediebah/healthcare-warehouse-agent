@@ -198,6 +198,124 @@ code, pre, kbd{ font-family:var(--font-mono) !important; }
 st.markdown(CSS, unsafe_allow_html=True)
 
 
+# ───────────────────────────── monitoring (ops surface) ─────────────────────────────
+def _mon_kpis(cards: list[dict]) -> None:
+    html_cards = "".join(
+        f"<div class='kpi-card'><div class='kpi-label'>{c['label']}</div>"
+        f"<div class='kpi-value'>{c['value']}</div><div class='kpi-sub'>{c.get('sub', '')}</div></div>"
+        for c in cards)
+    st.markdown(f"<div class='kpi-row'>{html_cards}</div>", unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _data_health() -> dict:
+    """Live, automated data-quality checks against the warehouse — the detect/diagnose half of a data-
+    quality agent: row volumes, primary-key uniqueness, referential integrity, completeness, metric sanity."""
+    from agent import warehouse as W
+
+    def scalar(sql: str):
+        return W.run_query(sql).iloc[0, 0]
+
+    try:
+        tables = ["dim_patient", "fct_encounters", "fct_conditions", "mart_readmissions",
+                  "mart_cost_by_condition"]
+        counts = {t: int(scalar(f"select count(*) as n from {t}")) for t in tables}
+        checks = []
+        pk = int(scalar("select (count(*) = count(distinct patient_id))::int from dim_patient"))
+        checks.append(("Primary-key uniqueness", "dim_patient.patient_id has no duplicates", pk == 1))
+        orphans = int(scalar("select count(*) from fct_encounters e "
+                             "left join dim_patient p on e.patient_id = p.patient_id "
+                             "where p.patient_id is null"))
+        checks.append(("Referential integrity", f"fct_encounters → dim_patient: {orphans} orphan row(s)",
+                       orphans == 0))
+        nullg = float(scalar("select avg((gender is null)::int) from dim_patient"))
+        checks.append(("Completeness", f"dim_patient.gender null rate {nullg:.1%}", nullg < 0.05))
+        readm = float(scalar("select avg(cast(is_30d_readmission as int)) from mart_readmissions"))
+        checks.append(("Metric sanity", f"30-day readmission rate {readm:.1%} (plausible band 3–25%)",
+                       0.03 <= readm <= 0.25))
+        return {"ok": True, "counts": counts, "checks": checks}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "err": str(e), "counts": {}, "checks": []}
+
+
+def _render_monitoring() -> None:
+    """The ops surface a data team watches in production: agent usage/latency/cost, human feedback, and
+    live warehouse data-quality checks. Reads logs/*.jsonl (per-deployment) + queries the warehouse."""
+    import altair as alt
+
+    from agent import observe
+    traces = observe.load_traces()
+    s = observe.summary(traces)
+
+    st.markdown("<div class='eyebrow'>System monitoring · agent + warehouse</div>", unsafe_allow_html=True)
+    if s["runs"]:
+        _mon_kpis([
+            {"label": "runs (this deploy)", "value": f"{s['runs']:,}"},
+            {"label": "success rate", "value": f"{s['success_rate'] * 100:.0f}%",
+             "sub": f"{s['errors']} errored"},
+            {"label": "latency p50", "value": f"{s['p50_ms'] / 1000:.1f}s", "sub": f"p95 {s['p95_ms'] / 1000:.1f}s"},
+            {"label": "avg tokens / run", "value": f"{s['avg_tokens']:,}"},
+            {"label": "est. spend", "value": f"${s['spend_usd']:.2f}", "sub": f"${s['avg_cost_usd']:.4f}/run"},
+        ])
+        dft = pd.DataFrame(traces)
+        dft["day"] = dft["ts"].astype(str).str[:10]
+        by_day = dft.groupby("day").size().reset_index(name="runs")
+        st.markdown("<div class='eyebrow'>Activity</div>", unsafe_allow_html=True)
+        ch = (alt.Chart(by_day).mark_bar(color="#4fd1c5", cornerRadiusEnd=2)
+              .encode(x=alt.X("day:O", title=None), y=alt.Y("runs:Q", title="runs"))
+              .properties(height=160, background="transparent")
+              .configure_axis(labelColor="#8ea0b0", titleColor="#8ea0b0", gridColor="#1a2531",
+                              domainColor="#20303f")
+              .configure_view(strokeWidth=0))
+        st.altair_chart(ch, use_container_width=True)
+        st.markdown("<div class='eyebrow'>Most-asked questions</div>", unsafe_allow_html=True)
+        top = dft["question"].value_counts().head(8).reset_index()
+        top.columns = ["question", "runs"]
+        st.dataframe(top, use_container_width=True, hide_index=True)
+    else:
+        st.info("No agent runs recorded in this deployment yet — run an analysis on the **Analyze** tab and "
+                "usage metrics populate here. (Traces are per-deployment and reset on redeploy.)")
+
+    fb = []
+    try:
+        if _FEEDBACK_LOG.exists():
+            for line in _FEEDBACK_LOG.read_text().splitlines():
+                try:
+                    fb.append(json.loads(line))
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    if fb:
+        up = sum(1 for f in fb if f.get("thumbs") == "up")
+        down = sum(1 for f in fb if f.get("thumbs") == "down")
+        st.markdown("<div class='eyebrow'>Human-in-the-loop feedback</div>", unsafe_allow_html=True)
+        _mon_kpis([{"label": "total ratings", "value": f"{len(fb):,}"},
+                   {"label": "👍 helpful", "value": f"{up:,}"},
+                   {"label": "👎 needs work", "value": f"{down:,}"}])
+        corr = [f for f in fb if f.get("correction")]
+        for f in corr[-3:]:
+            st.markdown(f"<div class='card' style='margin-bottom:.4rem'><b>{html.escape(str(f.get('question', ''))[:90])}"
+                        f"</b><br><span style='color:#8ea0b0'>{html.escape(str(f.get('correction', ''))[:200])}</span></div>",
+                        unsafe_allow_html=True)
+
+    st.markdown("<div class='eyebrow'>Warehouse data health · automated checks</div>", unsafe_allow_html=True)
+    health = _data_health()
+    if not health["ok"]:
+        st.warning(f"Health checks unavailable: {health.get('err', '')}")
+    else:
+        _mon_kpis([{"label": t.replace("_", " "), "value": f"{n:,}", "sub": "rows"}
+                   for t, n in health["counts"].items()])
+        for name, detail, ok in health["checks"]:
+            sev, tag = ("info", "PASS") if ok else ("caution", "FAIL")
+            st.markdown(f"<div class='gr-badge sev-{sev}'><span class='gr-tag'>{tag}</span>"
+                        f"<span class='gr-kind'>{name}</span><span class='gr-msg'>{detail}</span></div>",
+                        unsafe_allow_html=True)
+    st.markdown("<div class='trace'>Telemetry: logs/traces.jsonl · audit.jsonl · feedback.jsonl "
+                "(per-deployment) + live warehouse checks — the ops surface a data team watches in "
+                "production.</div>", unsafe_allow_html=True)
+
+
 @st.cache_data(show_spinner=False)
 def _data_dictionary() -> str:
     """Human-readable 'what data is available' from the semantic catalog — so users know the scope."""
@@ -240,6 +358,13 @@ st.markdown("""
     <span class="dot">·</span> read-only, row-capped</div>
 </div>
 """, unsafe_allow_html=True)
+
+# ───────────────────────────── nav ─────────────────────────────
+_view = st.segmented_control("nav", ["🔬 Analyze", "📊 Monitoring"], default="🔬 Analyze",
+                             label_visibility="collapsed")
+if _view == "📊 Monitoring":                             # render the ops surface and stop (skip the analyze flow)
+    _render_monitoring()
+    st.stop()
 
 # ───────────────────────────── ask ─────────────────────────────
 if "question" not in st.session_state:
