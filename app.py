@@ -381,29 +381,59 @@ def _dash_data() -> dict:
                          "from fct_encounters where year(encounter_date) between 2011 and 2025 group by 1 order by 1")
     out["cost_class"] = df("select encounter_class, round(avg(total_claim_cost), 0) avg_cost "
                            "from fct_encounters group by 1 order by 2 desc")
-    _s = ("select '{lbl}' as metric, count({c}) as n, round(avg({c}), {d}) as mean, "
-          "round(median({c}), {d}) as median, round(stddev_samp({c}), {d}) as sd, round(min({c}), {d}) as min, "
-          "round(quantile_cont({c}, 0.25), {d}) as p25, round(quantile_cont({c}, 0.75), {d}) as p75, "
-          "round(max({c}), {d}) as max from {t}")
-    out["stats"] = df(" union all ".join([
-        _s.format(lbl="Age (years)", c="age", d=1, t="dim_patient"),
-        _s.format(lbl="Income ($)", c="income", d=0, t="dim_patient"),
-        _s.format(lbl="Healthcare expenses ($)", c="healthcare_expenses", d=0, t="dim_patient"),
-        _s.format(lbl="Encounter cost ($)", c="total_claim_cost", d=0, t="fct_encounters"),
-    ]))
+    # numeric measures → a five-number summary (real quantiles) + a capped histogram per variable, so the
+    # descriptive section is fully visual. The right tail is clipped at P95 so heavy skew stays legible.
+    nums = [
+        ("Age (years)", "age", "dim_patient", ""),
+        ("Income ($)", "income", "dim_patient", "$"),
+        ("Healthcare expenses ($)", "healthcare_expenses", "dim_patient", "$"),
+        ("Encounter cost ($)", "total_claim_cost", "fct_encounters", "$"),
+    ]
+    box_rows, dist_frames = [], []
+    for lbl, c, t, unit in nums:
+        r = df(f"select count({c}) n, avg({c}) mean, stddev_samp({c}) sd, min({c}) mn, max({c}) mx, "
+               f"quantile_cont({c}, 0.05) p05, quantile_cont({c}, 0.25) p25, median({c}) p50, "
+               f"quantile_cont({c}, 0.75) p75, quantile_cont({c}, 0.95) p95 from {t}").iloc[0].to_dict()
+        r["metric"], r["unit"] = lbl, unit
+        box_rows.append(r)
+        hi = float(r["p95"]) or 1.0
+        binw = (hi / 24) or 1.0
+        h = df(f"select floor({c} / {binw}) b, count(*) n from {t} where {c} >= 0 and {c} < {hi} "
+               "group by 1 order by 1")
+        h["x0"], h["x1"] = h["b"] * binw, (h["b"] + 1) * binw
+        h["metric"] = lbl
+        dist_frames.append(h[["metric", "x0", "x1", "n"]])
+    out["box"] = pd.DataFrame(box_rows)
+    out["dist"] = pd.concat(dist_frames, ignore_index=True)
+
+    # Pearson correlation across patient-level measures (join per-patient encounter aggregates in)
+    lab = {"age": "Age", "income": "Income", "healthcare_expenses": "Health exp.",
+           "healthcare_coverage": "Coverage", "encounters": "Encounters", "enc_cost": "Enc cost"}
+    craw = df("select p.age, p.income, p.healthcare_expenses, p.healthcare_coverage, "
+              "coalesce(e.n_enc, 0) encounters, coalesce(e.tot, 0) enc_cost from dim_patient p "
+              "left join (select patient_id, count(*) n_enc, sum(total_claim_cost) tot "
+              "from fct_encounters group by 1) e on p.patient_id = e.patient_id")
+    cm = craw.corr(numeric_only=True).rename(index=lab, columns=lab)
+    out["corr_order"] = list(cm.columns)
+    out["corr"] = cm.reset_index(names="x").melt(id_vars="x", var_name="y", value_name="corr")
     return out
 
 
+def _dash_cfg(chart):
+    """Shared dark-theme config with no height — safe for layered AND concatenated charts."""
+    return (chart.configure_axis(labelColor="#8ea0b0", titleColor="#8ea0b0", gridColor="#182430",
+                                 domainColor="#20303f", labelFontSize=11, titleFontSize=11)
+            .configure_view(strokeWidth=0)
+            .configure_legend(labelColor="#8ea0b0", titleColor="#8ea0b0"))
+
+
 def _dash_theme(chart, height):
-    return (chart.properties(height=height, background="transparent")
-            .configure_axis(labelColor="#8ea0b0", titleColor="#8ea0b0", gridColor="#182430",
-                            domainColor="#20303f", labelFontSize=11, titleFontSize=11)
-            .configure_view(strokeWidth=0).configure_legend(labelColor="#8ea0b0"))
+    return _dash_cfg(chart.properties(height=height, background="transparent"))
 
 
 def _render_dashboard() -> None:
-    """First look at the data: cohort KPIs, demographics, clinical mix, utilization/cost, and a
-    descriptive-statistics table, all computed live over the warehouse."""
+    """First look at the data: cohort KPIs, demographics, clinical mix, utilization/cost, and fully
+    visual descriptive statistics (annotated distributions + a correlation heatmap), computed live."""
     import math
 
     import altair as alt
@@ -447,6 +477,22 @@ def _render_dashboard() -> None:
             x=alt.X(f"{val}:Q", scale=xscale), text=alt.Text(f"{val}:Q", format=fmt))
         return _dash_theme(alt.layer(bars, lab), h or (24 + 26 * len(data)))
 
+    def donut(data, cat, val):
+        # fold the share into the legend label (e.g. "F · 52%") rather than radial text marks, which
+        # glitch during Streamlit's 0-width first layout pass
+        dd = data.copy()
+        tot = float(dd[val].sum()) or 1.0
+        dd["slice"] = [f"{g} · {v / tot:.0%}" for g, v in zip(dd[cat], dd[val])]
+        order = list(dd["slice"])
+        arc = alt.Chart(dd).mark_arc(innerRadius=46, outerRadius=74, cornerRadius=2,
+                                     stroke="#0b1219", strokeWidth=2).encode(
+            theta=alt.Theta(f"{val}:Q", stack=True),
+            order=alt.Order(f"{val}:Q", sort="descending"),
+            color=alt.Color("slice:N", sort=order,
+                            scale=alt.Scale(range=[teal, blue, "#f5c451", "#e0736b"]),
+                            legend=alt.Legend(orient="bottom", title=None, symbolType="circle")))
+        return _dash_theme(arc, 200)
+
     st.markdown("<div class='eyebrow'>Who · demographics</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -455,10 +501,10 @@ def _render_dashboard() -> None:
                              order=["0-17", "18-39", "40-64", "65-74", "75+"]), use_container_width=True)
     with c2:
         st.caption("Sex")
-        st.altair_chart(vbar(d["gender"], "gender", "n"), use_container_width=True)
+        st.altair_chart(donut(d["gender"], "gender", "n"), use_container_width=True)
     with c3:
         st.caption("Race")
-        st.altair_chart(hbar(d["race"], "race", "n", h=190), use_container_width=True)
+        st.altair_chart(hbar(d["race"], "race", "n", h=200), use_container_width=True)
 
     st.markdown("<div class='eyebrow'>What · clinical</div>", unsafe_allow_html=True)
     c4, c5 = st.columns([3, 2])
@@ -483,21 +529,82 @@ def _render_dashboard() -> None:
         st.altair_chart(hbar(d["cost_class"], "encounter_class", "avg_cost", color=blue, fmt="$,.0f"),
                         use_container_width=True)
 
-    st.markdown("<div class='eyebrow'>Descriptive statistics · key numerics</div>", unsafe_allow_html=True)
-    stats = d["stats"].copy()
+    # ---- descriptive statistics, fully visual: annotated distributions + correlation heatmap ----
+    st.markdown("<div class='eyebrow'>Distributions · continuous measures</div>", unsafe_allow_html=True)
+    st.markdown("<div class='trace' style='margin:-.35rem 0 .4rem'>histogram &nbsp;·&nbsp; shaded band = IQR "
+                "(P25&ndash;P75) &nbsp;·&nbsp; solid line = median &nbsp;·&nbsp; dashed line = mean "
+                "&nbsp;·&nbsp; right tail clipped at P95 for legibility</div>", unsafe_allow_html=True)
 
-    def _num(v):
-        if v is None or (isinstance(v, float) and math.isnan(v)):
-            return "—"
-        return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.1f}"
-    for col in ["mean", "median", "sd", "min", "p25", "p75", "max"]:
-        stats[col] = stats[col].map(_num)
-    stats["n"] = stats["n"].map(lambda v: f"{int(v):,}")
-    stats.columns = ["Variable", "N", "Mean", "Median", "SD", "Min", "P25", "P75", "Max"]
-    st.dataframe(stats, use_container_width=True, hide_index=True)
+    def dist_card(row):
+        dd = d["dist"][d["dist"]["metric"] == row["metric"]]
+        fmt = "$,.2s" if row["unit"] == "$" else ",.0f"
+        xsc = alt.Scale(domain=[0, float(row["p95"]) or 1.0], nice=False)
+        ymax = float(dd["n"].max()) if len(dd) else 1.0
+        ysc = alt.Scale(domain=[0, ymax], nice=False)               # shared, bounded count scale
+        seg = pd.DataFrame([{**row, "_y0": 0.0, "_y1": ymax}])
+        band = alt.Chart(seg).mark_rect(color=teal, opacity=0.12).encode(   # IQR (P25-P75) shaded region
+            x=alt.X("p25:Q", scale=xsc), x2="p75:Q",
+            y=alt.Y("_y0:Q", scale=ysc, axis=None), y2="_y1:Q")
+        hist = alt.Chart(dd).mark_area(color=teal, opacity=0.35, interpolate="step-after",
+                                       line={"color": teal, "strokeWidth": 1.5}).encode(
+            x=alt.X("x0:Q", scale=xsc, title=None,
+                    axis=alt.Axis(format=fmt, tickCount=5, labelAngle=0, domain=False, grid=False, ticks=False)),
+            y=alt.Y("n:Q", title=None, axis=None, scale=ysc))
+        med = alt.Chart(seg).mark_rule(color="#eaf2f8", strokeWidth=2).encode(x=alt.X("p50:Q", scale=xsc))
+        mean = alt.Chart(seg).mark_rule(color=blue, strokeWidth=2, strokeDash=[4, 3]).encode(
+            x=alt.X("mean:Q", scale=xsc))
+        return _dash_theme(alt.layer(band, hist, med, mean), 150)
+
+    def _cap(r):
+        f = (lambda v: f"${v:,.0f}") if r["unit"] == "$" else (lambda v: f"{v:,.0f}")
+        return (f"median {f(r['p50'])} &nbsp;·&nbsp; mean {f(r['mean'])} &nbsp;·&nbsp; "
+                f"n {int(r['n']):,} &nbsp;·&nbsp; max {f(r['mx'])}")
+
+    _byname = {r["metric"]: r for r in d["box"].to_dict("records")}
+    for pair in [["Age (years)", "Income ($)"], ["Healthcare expenses ($)", "Encounter cost ($)"]]:
+        cols = st.columns(2)
+        for col, name in zip(cols, pair):
+            with col:
+                r = _byname[name]
+                st.caption(name)
+                st.altair_chart(dist_card(r), use_container_width=True)
+                st.markdown(f"<div class='trace'>{_cap(r)}</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='eyebrow' style='margin-top:1.4rem'>How the measures move together · correlation</div>",
+                unsafe_allow_html=True)
+    hc1, hc2 = st.columns([3, 2])
+    with hc1:
+        corder = d["corr_order"]
+        cbase = alt.Chart(d["corr"]).encode(
+            x=alt.X("x:N", sort=corder, title=None, axis=alt.Axis(labelAngle=0, labelLimit=90)),
+            y=alt.Y("y:N", sort=corder, title=None))
+        rects = cbase.mark_rect(cornerRadius=3, stroke="#0b1219", strokeWidth=3).encode(
+            color=alt.Color("corr:Q", scale=alt.Scale(domain=[-1, 0, 1], range=["#e0736b", "#12202b", "#4fd1c5"]),
+                            legend=alt.Legend(title="r", orient="right", gradientLength=110)))
+        txt = cbase.mark_text(fontSize=11, fontWeight="bold").encode(
+            text=alt.Text("corr:Q", format=".2f"),
+            color=alt.condition("abs(datum.corr) > 0.55", alt.value("#0b1219"), alt.value("#9fb0bf")))
+        st.altair_chart(_dash_theme(alt.layer(rects, txt), 34 * len(corder) + 18), use_container_width=True)
+    with hc2:
+        st.markdown("<div class='trace' style='margin-top:2rem'>Pearson correlations across patient-level "
+                    "measures. Age tracks healthcare expense (r &asymp; 0.5); income moves largely "
+                    "independently of cost and utilization. The diagonal is 1 by definition.</div>",
+                    unsafe_allow_html=True)
+
+    with st.expander("Show the exact five-number summary"):
+        def _num(v):
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                return "—"
+            return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.1f}"
+        tb = d["box"][["metric", "n", "mean", "sd", "mn", "p05", "p25", "p50", "p75", "p95", "mx"]].copy()
+        for cc in ["mean", "sd", "mn", "p05", "p25", "p50", "p75", "p95", "mx"]:
+            tb[cc] = tb[cc].map(_num)
+        tb["n"] = tb["n"].map(lambda v: f"{int(v):,}")
+        tb.columns = ["Variable", "N", "Mean", "SD", "Min", "P5", "P25", "Median", "P75", "P95", "Max"]
+        st.dataframe(tb, use_container_width=True, hide_index=True)
     st.markdown("<div class='trace'>Computed live over the full warehouse (read-only). Synthetic Synthea data; "
-                "the negative age minimum is a generation artifact, exactly the kind of thing a first look "
-                "surfaces before you model.</div>", unsafe_allow_html=True)
+                "the negative age minimum (Min column) is a generation artifact, exactly the kind of thing a "
+                "first look surfaces before you model.</div>", unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
