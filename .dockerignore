@@ -1,0 +1,38 @@
+# Keep the image lean and never ship secrets or the 200MB full warehouse.
+.git
+.gitignore
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# secrets & personal notes — never ship
+**/.env
+RUNBOOK.md
+CONCEPTS.md
+GOVERNANCE.md
+.claude
+.remember
+
+# the full warehouse (200MB) — the app uses the committed slim demo DB instead
+data/healthcare.duckdb
+data/*.duckdb.wal
+data/*.bak
+
+# build artifacts / dev-only paths not needed at runtime
+warehouse/target
+warehouse/dbt_packages
+warehouse/logs
+logs
+synthea
+tests
+.devcontainer
+.github
+.playwright-mcp
+*.png
+Dockerfile
+.dockerignore
