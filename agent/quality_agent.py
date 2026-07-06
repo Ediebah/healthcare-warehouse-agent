@@ -386,6 +386,31 @@ def run(db_path: str | Path | None = None) -> dict:
     return report
 
 
+# ─────────────────────────────── pre-flight gate ───────────────────────────────
+_HEALTH_CACHE: dict[str, dict] = {}
+
+
+def preflight(db_path: str | Path | None = None, force: bool = False) -> dict:
+    """Fast, cached data-health check to run BEFORE an analysis — "don't reason over corrupt data."
+    Runs the check battery once per warehouse and summarizes. `blocking` is True when a CRITICAL check
+    (primary-key uniqueness / referential integrity) fails, so the caller can refuse to produce metrics
+    that would move a broken pipeline downstream. Read-only; never raises (a check that can't run is
+    recorded as a non-blocking failure)."""
+    key = str(db_path) if db_path else ""
+    if force or key not in _HEALTH_CACHE:
+        results = detect(None if key == "" else key)
+        failures = [{"name": r.check.name, "severity": r.check.severity, "summary": r.summary,
+                     "errored": bool(r.error)} for r in results if not r.passed]
+        _HEALTH_CACHE[key] = {
+            "healthy": not failures,
+            "n_checks": len(results),
+            "n_failed": len(failures),
+            "blocking": any(f["severity"] == "critical" for f in failures),
+            "failures": failures,
+        }
+    return _HEALTH_CACHE[key]
+
+
 # ─────────────────────────────── self-contained demo ───────────────────────────────
 def make_demo_db() -> str:
     """Create a THROWAWAY temp DuckDB seeded with deliberately-planted data-quality defects, so the full

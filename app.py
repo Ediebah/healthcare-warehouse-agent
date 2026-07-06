@@ -788,6 +788,22 @@ def _render_lineage(lin: dict | None) -> None:
             st.caption("Raw source(s): " + ", ".join(lin["sources"]))
 
 
+def _render_data_health(h: dict | None) -> None:
+    """Pre-flight data-health banner — red gate (blocking) or amber warning (non-blocking)."""
+    if not h or h.get("healthy"):
+        return
+    blocking = h.get("blocking")
+    color, icon, word = ("#f87171", "⛔", "gate") if blocking else ("#f5c451", "⚠", "warning")
+    items = "".join(
+        f"<li>{html.escape(f['name'])} — {html.escape(f['summary'])} "
+        f"<span style='color:#8ea0b0;font-size:.85em'>[{html.escape(f['severity'])}]</span></li>"
+        for f in h.get("failures", []))
+    st.markdown(
+        f"<div class='card' style='border-left:3px solid {color}'>{icon} <b>Data-health {word}</b> — "
+        f"{h['n_failed']} of {h['n_checks']} checks failing:<ul style='margin:.4rem 0 0'>{items}</ul></div>",
+        unsafe_allow_html=True)
+
+
 def _result_key(result) -> str:
     """Content hash of a result — the report cache is keyed on THIS, never on the question text, so a
     cross-session cache hit can only mean identical content (no leak of one user's uploaded data)."""
@@ -927,6 +943,7 @@ result = st.session_state.get("result")
 result_q = st.session_state.get("result_q", "")
 
 if result is not None:
+    _render_data_health(result.data_health)      # pre-flight gate/warning banner (no-op if healthy)
     if result.clarification:
         eyebrow("Clarification needed")
         st.markdown(f"<div class='card' style='border-left:3px solid var(--accent-2)'>🤔 "

@@ -15,7 +15,7 @@ correction, confounding) that a text-to-SQL tool never does. Built by a clinical
 Built entirely on **synthetic EHR data (zero PHI)**, so the whole thing is public and reproducible.
 
 **🔗 Live demo:** [healthcare-warehouse-agent.streamlit.app](https://healthcare-warehouse-agent.streamlit.app)
-· **CI on every push:** `dbt build` + 104 data tests + 105 unit tests + guardrail eval.
+· **CI on every push:** `dbt build` + 104 data tests + 117 unit tests + guardrail eval.
 
 ![Clinical Insight Agent: a natural-language answer rendered as KPI cards, a bar chart with Wilson 95% confidence-interval whiskers, self-verification, and the statistical guardrail (contrasts + FDR, confounding).](assets/dashboard.png)
 
@@ -35,7 +35,11 @@ Built entirely on **synthetic EHR data (zero PHI)**, so the whole thing is publi
   *diabetes*, *MI* — and it resolves the term to the warehouse's real SNOMED codes before querying (so
   "heart attack" finds *Myocardial infarction*), grounds the cohort in what actually exists, and says so
   honestly when a condition isn't in the data instead of analyzing an empty set.
-- **Production-shaped:** read-only hardened at the engine, a live monitoring tab, an eval suite, 105 unit
+- **Trust the data before reasoning over it.** It traces any number back through the dbt lineage
+  (*"where does the readmission rate come from?"* → `mart_readmissions ← fct_encounters ← raw
+  synthea.encounters`), and a **pre-flight health gate** refuses to run analyses over a warehouse
+  that's failing critical integrity checks — so a broken pipeline can't push corrupt metrics downstream.
+- **Production-shaped:** read-only hardened at the engine, a live monitoring tab, an eval suite, 117 unit
   tests + CI, a Dockerfile, bring-your-own-data upload, and a `.docx` report export.
 
 ---
@@ -87,6 +91,18 @@ tiny cohort (e.g. *stroke*, n=6) is reported as too small to model rather than f
 user text ever reaches SQL — matching happens over an in-memory copy of the vocabulary, so the injection
 surface is zero. Hardened against a **~2,250-scenario adversarial stress test** (0 crashes / false-blocks /
 invalid filters throughout); whole-word matching took precision on benign analytical questions to 100%.
+
+### Data trust — lineage + a pre-flight health gate  (`agent/lineage.py`, `agent/quality_agent.py`)
+Two guards so an agent only reasons over data it can trust:
+- **Lineage / provenance.** A *"where does this number come from?"* question is answered **deterministically
+  from the dbt DAG** (no LLM, no SQL): *"where does the readmission rate come from?"* → `mart_readmissions ←
+  fct_encounters ← stg_encounters ← raw synthea.encounters`; *"what depends on fct_encounters?"* walks it the
+  other way. The lineage is baked into the semantic catalog at build time, so it works on the deployed app
+  with no manifest present, and **every** analysis attaches the provenance of the tables its SQL touched.
+- **Pre-flight health gate.** Before producing metrics, a cached data-quality battery (PK uniqueness,
+  referential integrity, completeness, accepted values, numeric ranges) runs against the warehouse; a
+  **critical** failure (a duplicate key or an orphaned foreign key) **blocks the analysis** rather than let a
+  broken pipeline push corrupt numbers downstream — silent when healthy, loud when not.
 
 ### Model families it fits  (`agent/modeling.py`)
 | Question shape | Model | Output |
@@ -160,7 +176,7 @@ tables + 6 named metrics with statistical caveats) is auto-generated from the db
 warehouse AI-readable, and a deterministic **token-overlap RAG** retrieves over it (no embedding calls).
 
 ### Engineering
-- **105 keyless `pytest` unit tests** (guardrail stats, SQL validation & security, retrieval, charts, agent
+- **117 keyless `pytest` unit tests** (guardrail stats, SQL validation & security, retrieval, charts, agent
   helpers, modeling) + `ruff` + a coverage gate, run in CI.
 - **GitHub Actions CI:** Synthea → DuckDB → `dbt build` (104 tests) → regenerate the catalog → guardrail eval,
   on every push.
@@ -201,7 +217,7 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
 .venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
-.venv/bin/pytest                           # 105 keyless unit tests   (ruff check . to lint)
+.venv/bin/pytest                           # 117 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -246,7 +262,7 @@ pandas / numpy · **Altair** (+ vl-convert for print figures) · **python-docx**
 │   ├── charts.py · llm.py · observe.py · build_catalog.py
 │   └── eval*.py · guardrail_eval.py · eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       105 keyless pytest unit tests
+├── tests/                       117 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
 ├── Dockerfile · DEPLOY.md · GOVERNANCE.md
