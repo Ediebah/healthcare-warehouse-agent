@@ -15,7 +15,7 @@ correction, confounding) that a text-to-SQL tool never does. Built by a clinical
 Built entirely on **synthetic EHR data (zero PHI)**, so the whole thing is public and reproducible.
 
 **🔗 Live demo:** [healthcare-warehouse-agent.streamlit.app](https://healthcare-warehouse-agent.streamlit.app)
-· **CI on every push:** `dbt build` + 104 data tests + 84 unit tests + guardrail eval.
+· **CI on every push:** `dbt build` + 104 data tests + 105 unit tests + guardrail eval.
 
 ![Clinical Insight Agent: a natural-language answer rendered as KPI cards, a bar chart with Wilson 95% confidence-interval whiskers, self-verification, and the statistical guardrail (contrasts + FDR, confounding).](assets/dashboard.png)
 
@@ -31,7 +31,11 @@ Built entirely on **synthetic EHR data (zero PHI)**, so the whole thing is publi
   forecasting, feature importance, and design-stage power/sample-size.
 - **Encodes biostatistics rigor** a SQL bot skips: covariate adjustment, confidence intervals everywhere,
   FDR multiplicity correction, confounding/Simpson's-paradox flags, and assumption diagnostics.
-- **Production-shaped:** read-only hardened at the engine, a live monitoring tab, an eval suite, 84 unit
+- **Condition-specific, in plain English.** Name a disease the way people say it — *heart attack*, *COPD*,
+  *diabetes*, *MI* — and it resolves the term to the warehouse's real SNOMED codes before querying (so
+  "heart attack" finds *Myocardial infarction*), grounds the cohort in what actually exists, and says so
+  honestly when a condition isn't in the data instead of analyzing an empty set.
+- **Production-shaped:** read-only hardened at the engine, a live monitoring tab, an eval suite, 105 unit
   tests + CI, a Dockerfile, bring-your-own-data upload, and a `.docx` report export.
 
 ---
@@ -71,6 +75,18 @@ DuckDB SQL → execute read-only and **self-heal up to 4× on SQL error / empty 
 catalog tables used → statistical guardrail → **LLM verify-critic** ("does this SQL answer *this* question?")
 → interpret with a recommendation. A per-run wall-clock budget and graceful degradation mean it never hangs
 or crashes the app; every run's tokens/latency/cost are persisted.
+
+### Condition-specific analysis  (`agent/vocabulary.py`)
+Ask about a specific disease in plain English and a deterministic resolver maps the term to the warehouse's
+real SNOMED `condition_description` values **before** any SQL runs: *heart attack* → *Myocardial infarction*,
+*COPD* → *chronic obstructive bronchitis* **and** *pulmonary emphysema*, plus common abbreviations (MI, HTN,
+CKD, IHD) and demonyms/plurals (*diabetics*, *asthmatics*). Both the aggregate and the model paths then filter
+on a cohort that exists, so the agent never silently fits a model on an empty set; a condition absent from this
+synthetic build (e.g. *flu*) returns an honest clarification naming the closest available conditions, and a
+tiny cohort (e.g. *stroke*, n=6) is reported as too small to model rather than forced. It's keyless, and no
+user text ever reaches SQL — matching happens over an in-memory copy of the vocabulary, so the injection
+surface is zero. Hardened against a **~2,250-scenario adversarial stress test** (0 crashes / false-blocks /
+invalid filters throughout); whole-word matching took precision on benign analytical questions to 100%.
 
 ### Model families it fits  (`agent/modeling.py`)
 | Question shape | Model | Output |
@@ -144,7 +160,7 @@ tables + 6 named metrics with statistical caveats) is auto-generated from the db
 warehouse AI-readable, and a deterministic **token-overlap RAG** retrieves over it (no embedding calls).
 
 ### Engineering
-- **84 keyless `pytest` unit tests** (guardrail stats, SQL validation & security, retrieval, charts, agent
+- **105 keyless `pytest` unit tests** (guardrail stats, SQL validation & security, retrieval, charts, agent
   helpers, modeling) + `ruff` + a coverage gate, run in CI.
 - **GitHub Actions CI:** Synthea → DuckDB → `dbt build` (104 tests) → regenerate the catalog → guardrail eval,
   on every push.
@@ -184,7 +200,8 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
-.venv/bin/pytest                           # 84 keyless unit tests    (ruff check . to lint)
+.venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
+.venv/bin/pytest                           # 105 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -229,7 +246,7 @@ pandas / numpy · **Altair** (+ vl-convert for print figures) · **python-docx**
 │   ├── charts.py · llm.py · observe.py · build_catalog.py
 │   └── eval*.py · guardrail_eval.py · eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       84 keyless pytest unit tests
+├── tests/                       105 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
 ├── Dockerfile · DEPLOY.md · GOVERNANCE.md
@@ -250,5 +267,3 @@ pandas / numpy · **Altair** (+ vl-convert for print figures) · **python-docx**
 - The agent is grounded to the catalog and read-only, but it can still write a well-formed query that answers
   a subtly different question than intended, which is exactly why the shown SQL, guardrail, and verify-critic
   keep a human in the loop.
-</content>
-</invoke>
