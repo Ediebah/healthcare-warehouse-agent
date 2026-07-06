@@ -44,7 +44,7 @@ class Check:
     """A declarative data-quality rule. `sql` is a read-only query that surfaces the OFFENDING evidence
     (violating rows for row-based kinds, or a one-row summary for completeness/metric_band)."""
     name: str
-    kind: str                       # unique | referential | completeness | metric_band | accepted_values
+    kind: str                       # unique | referential | completeness | metric_band | accepted_values | range
     severity: str                   # critical | high | medium
     description: str
     sql: str
@@ -122,6 +122,48 @@ CHECKS: list[Check] = [
             "order by n_rows desc, value"
         ),
     ),
+    Check(
+        name="Age in human range",
+        kind="range",
+        severity="high",
+        description="dim_patient.age must sit within [0, 120]. A fixed as_of_date once measured newborns "
+                    "generated after it as NEGATIVE ages.",
+        table="dim_patient", column="age", band=(0, 120),
+        sql=(
+            "select patient_id, age as value "
+            "from dim_patient "
+            "where age < 0 or age > 120 "
+            "order by value limit 50"
+        ),
+    ),
+    Check(
+        name="Non-negative medication supply",
+        kind="range",
+        severity="medium",
+        description="fct_medications.days_supplied must sit within [0, 36525]. A negative span means the "
+                    "source dispense_stop precedes dispense_start.",
+        table="fct_medications", column="days_supplied", band=(0, 36525),
+        sql=(
+            "select medication_order_id, days_supplied as value "
+            "from fct_medications "
+            "where days_supplied < 0 or days_supplied > 36525 "
+            "order by value limit 50"
+        ),
+    ),
+    Check(
+        name="Non-negative readmission gap",
+        kind="range",
+        severity="medium",
+        description="mart_readmissions.days_to_next_admission must sit within [0, 36525]. A negative gap "
+                    "means overlapping encounters were treated as a sequential readmission.",
+        table="mart_readmissions", column="days_to_next_admission", band=(0, 36525),
+        sql=(
+            "select index_encounter_id, days_to_next_admission as value "
+            "from mart_readmissions "
+            "where days_to_next_admission < 0 or days_to_next_admission > 36525 "
+            "order by value limit 50"
+        ),
+    ),
 ]
 
 
@@ -162,6 +204,11 @@ def _evaluate(check: Check, df: pd.DataFrame) -> tuple[bool, str]:
         lo, hi = check.band or (0.0, 1.0)
         ok = (not math.isnan(val)) and lo <= val <= hi
         return ok, f"value {val:.1%} (band {lo:.0%}–{hi:.0%})"
+    if kind == "range":
+        n = len(df)
+        lo, hi = check.band or (0.0, float("inf"))
+        return n == 0, (f"all {check.column} within [{lo:g}, {hi:g}]" if n == 0
+                        else f"{n} row(s) with {check.column} outside [{lo:g}, {hi:g}]")
     return True, "no rule"
 
 
@@ -229,6 +276,15 @@ def diagnose(result: CheckResult) -> str:
         return (f"{check.table}.{check.column} holds {n_rows} row(s) with {n_vals} value(s) outside the "
                 f"accepted set {_accepted_set(check)}: {ex}. Likely un-normalized source codes that must "
                 f"be mapped or filtered upstream.")
+    if check.kind == "range":
+        n = len(df)
+        lo, hi = check.band or (0.0, float("inf"))
+        idcol = df.columns[0]
+        ex = "; ".join(f"{idcol}={row[idcol]!r} → {check.column}={row['value']:g}"
+                       for _, row in df.head(3).iterrows())
+        return (f"{check.table}.{check.column} has {n} row(s) outside the plausible range "
+                f"[{lo:g}, {hi:g}]: e.g. {ex}. An impossible value (a negative age/span, a future date) "
+                f"signals a source or derivation bug — guard it in the model, don't publish it.")
     return f"{check.name}: {result.summary}"
 
 
@@ -237,8 +293,8 @@ _FIX_SYSTEM = (
     "You are a data-reliability / analytics engineer remediating a data-quality defect in a dbt-modeled "
     "DuckDB warehouse. Propose ONE corrected, GUARDED query that returns a clean version of the affected "
     "table — pick the right pattern for the defect: a dedup CTE using row_number() over a partition, a "
-    "join/filter that drops orphan rows, a coalesce() that fills a nullable column, or a whitelist filter "
-    "for accepted values.\n"
+    "join/filter that drops orphan rows, a coalesce() that fills a nullable column, a whitelist filter "
+    "for accepted values, or a range guard (a CASE/WHERE that nulls or excludes out-of-bounds numerics).\n"
     "HARD CONSTRAINT: the SQL MUST be a SINGLE READ-ONLY statement beginning with SELECT or WITH. No "
     "INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/COPY/ATTACH/PRAGMA, no semicolons, no file-reading functions. "
     "It is a PROPOSAL for a human to fold into the staging model — it is NEVER executed against the warehouse."
@@ -336,23 +392,26 @@ def make_demo_db() -> str:
     detect → diagnose → propose-fix loop is demonstrable even when the real warehouse is healthy.
 
     Writes ONLY to a fresh temp path — never the real warehouse. Returns the db path as a string.
-    Planted: a duplicate primary key, an orphan FK encounter, null genders (completeness), and an
-    out-of-domain gender code (accepted-values). The readmission metric is left IN band so the report
-    also shows a healthy check. Caller owns cleanup (remove the returned file's parent dir)."""
+    Planted: a duplicate primary key, an orphan FK encounter, null genders (completeness), an
+    out-of-domain gender code (accepted-values), and out-of-range numerics — a negative age, a
+    negative medication supply, and a negative readmission gap (range). The readmission metric is
+    left IN band so the report also shows a healthy check. Caller owns cleanup (remove the parent dir)."""
     db_path = Path(tempfile.mkdtemp(prefix="dq_demo_")) / "healthcare_defects.duckdb"
     con = duckdb.connect(str(db_path))
     try:
-        # dim_patient: 10 clean patients P001..P010, gender alternating M/F
-        con.execute("create table dim_patient (patient_id varchar, gender varchar)")
+        # dim_patient: 10 clean patients P001..P010, gender alternating M/F, plausible ages 25..70
+        con.execute("create table dim_patient (patient_id varchar, gender varchar, age integer)")
         con.execute(
             "insert into dim_patient "
             "select 'P' || lpad(cast(i as varchar), 3, '0'), "
-            "case when i % 2 = 0 then 'F' else 'M' end "
+            "case when i % 2 = 0 then 'F' else 'M' end, "
+            "20 + i * 5 "
             "from range(1, 11) t(i)"
         )
-        con.execute("insert into dim_patient values ('P001', 'M')")                  # PLANT: duplicate PK
-        con.execute("insert into dim_patient values ('P011', null), ('P012', null)")  # PLANT: null gender
-        con.execute("insert into dim_patient values ('P013', 'U')")                   # PLANT: bad gender code
+        con.execute("insert into dim_patient values ('P001', 'M', 40)")                  # PLANT: duplicate PK
+        con.execute("insert into dim_patient values ('P011', null, 33), ('P012', null, 44)")  # PLANT: null gender
+        con.execute("insert into dim_patient values ('P013', 'U', 51)")                   # PLANT: bad gender code
+        con.execute("insert into dim_patient values ('P014', 'F', -3)")                   # PLANT: negative age (range)
 
         # fct_encounters: 30 valid encounters spread across the real patients
         con.execute("create table fct_encounters (encounter_id varchar, patient_id varchar)")
@@ -364,9 +423,21 @@ def make_demo_db() -> str:
         )
         con.execute("insert into fct_encounters values ('E9999', 'GHOST')")           # PLANT: orphan FK
 
-        # mart_readmissions: 9 of 100 readmitted → 9% (inside the 3–25% band → this check PASSES)
-        con.execute("create table mart_readmissions (is_30d_readmission boolean)")
-        con.execute("insert into mart_readmissions select (i < 9) from range(0, 100) t(i)")
+        # fct_medications: 20 valid 30-day supplies
+        con.execute("create table fct_medications (medication_order_id varchar, days_supplied integer)")
+        con.execute(
+            "insert into fct_medications "
+            "select 'M' || lpad(cast(i as varchar), 4, '0'), 30 from range(0, 20) t(i)"
+        )
+        con.execute("insert into fct_medications values ('M9999', -6)")               # PLANT: negative supply (range)
+
+        # mart_readmissions: 9 of 100 readmitted → ~9% (inside the 3–25% band → that check PASSES)
+        con.execute("create table mart_readmissions "
+                    "(index_encounter_id varchar, is_30d_readmission boolean, days_to_next_admission integer)")
+        con.execute("insert into mart_readmissions "
+                    "select 'E' || lpad(cast(i as varchar), 4, '0'), (i < 9), "
+                    "case when i < 9 then 15 else null end from range(0, 100) t(i)")
+        con.execute("insert into mart_readmissions values ('E9998', false, -4)")      # PLANT: negative gap (range)
     finally:
         con.close()
     return str(db_path)

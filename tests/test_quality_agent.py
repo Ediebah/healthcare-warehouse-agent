@@ -28,14 +28,19 @@ def healthy_db(tmp_path):
     path = tmp_path / "healthy.duckdb"
     con = duckdb.connect(str(path))
     try:
-        con.execute("create table dim_patient (patient_id varchar, gender varchar)")
+        con.execute("create table dim_patient (patient_id varchar, gender varchar, age integer)")
         con.execute("insert into dim_patient select 'P' || lpad(cast(i as varchar), 3, '0'), "
-                    "case when i % 2 = 0 then 'F' else 'M' end from range(1, 11) t(i)")
+                    "case when i % 2 = 0 then 'F' else 'M' end, 20 + i * 5 from range(1, 11) t(i)")
         con.execute("create table fct_encounters (encounter_id varchar, patient_id varchar)")
         con.execute("insert into fct_encounters select 'E' || lpad(cast(i as varchar), 4, '0'), "
                     "'P' || lpad(cast((i % 10) + 1 as varchar), 3, '0') from range(0, 30) t(i)")
-        con.execute("create table mart_readmissions (is_30d_readmission boolean)")
-        con.execute("insert into mart_readmissions select (i < 9) from range(0, 100) t(i)")
+        con.execute("create table fct_medications (medication_order_id varchar, days_supplied integer)")
+        con.execute("insert into fct_medications select 'M' || lpad(cast(i as varchar), 4, '0'), 30 "
+                    "from range(0, 20) t(i)")
+        con.execute("create table mart_readmissions "
+                    "(index_encounter_id varchar, is_30d_readmission boolean, days_to_next_admission integer)")
+        con.execute("insert into mart_readmissions select 'E' || lpad(cast(i as varchar), 4, '0'), (i < 9), "
+                    "case when i < 9 then 15 else null end from range(0, 100) t(i)")
     finally:
         con.close()
     return str(path)
@@ -52,6 +57,9 @@ def test_detect_flags_every_planted_defect(defect_db):
     assert not r["Referential integrity"].passed
     assert not r["Completeness"].passed
     assert not r["Accepted values"].passed
+    assert not r["Age in human range"].passed            # planted negative age
+    assert not r["Non-negative medication supply"].passed   # planted negative days_supplied
+    assert not r["Non-negative readmission gap"].passed  # planted negative days_to_next_admission
     assert r["Metric in band"].passed               # readmission rate is left in-band → this one passes
 
 
@@ -84,10 +92,13 @@ def test_diagnose_names_the_specific_violation(defect_db):
     assert "orphan" in dx_ref.lower() and "GHOST" in dx_ref
 
     dx_comp = qa.diagnose(r["Completeness"])
-    assert "gender" in dx_comp and "14.3%" in dx_comp        # 2 of 14 rows null
+    assert "gender" in dx_comp and "13.3%" in dx_comp        # 2 of 15 rows null
 
     dx_av = qa.diagnose(r["Accepted values"])
     assert "'U'" in dx_av and "{M, F}" in dx_av
+
+    dx_range = qa.diagnose(r["Age in human range"])
+    assert "age" in dx_range.lower() and "-3" in dx_range and "range" in dx_range.lower()
 
 
 # ─────────────────────────────── PROPOSE FIX (monkeypatched LLM) ───────────────────────────────
