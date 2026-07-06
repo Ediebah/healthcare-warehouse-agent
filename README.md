@@ -151,7 +151,8 @@ warehouse AI-readable, and a deterministic **token-overlap RAG** retrieves over 
 
 ### Engineering
 - **117 keyless `pytest` unit tests** (guardrail stats, SQL validation & security, retrieval, charts, agent
-  helpers, modeling) + `ruff` + a coverage gate, run in CI.
+  helpers, modeling, condition-vocabulary grounding, data lineage, and the data-quality gate) + `ruff` +
+  a coverage gate, run in CI.
 - **GitHub Actions CI:** Synthea → DuckDB → `dbt build` (111 tests) → regenerate the catalog → guardrail eval,
   on every push.
 - **Eval suite** over one 35-case labeled `GOLD` set: answer accuracy, retrieval precision/recall/MRR
