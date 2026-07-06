@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import guardrails, lineage, llm, modeling, retrieval, vocabulary
+from . import guardrails, lineage, llm, modeling, quality_agent, retrieval, vocabulary
 from .warehouse import QueryError, run_query
 
 MAX_SQL_TRIES = 4
@@ -120,6 +120,7 @@ class AgentResult:
     model: dict | None = None                                 # inferential model result (ModelResult.as_dict)
     interpretation: str = ""
     lineage: dict | None = None                               # data provenance of the tables used
+    data_health: dict | None = None                           # pre-flight data-quality gate result
     trace: dict | None = None                                 # {calls, tokens, latency_ms, est_cost_usd}
     error: str | None = None
 
@@ -525,6 +526,23 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
             result.lineage = lineage.for_tables([_subj], lin_cat)
             result.citations = [_subj]
             return result
+
+        # Pre-flight data-health gate: don't produce metrics over a broken warehouse. Runs the
+        # quality battery once (cached); a CRITICAL failure (PK dup / referential integrity) blocks
+        # the analysis so a broken pipeline can't push corrupt numbers downstream. (Demo warehouse
+        # only; lineage questions above are exempt — they read the catalog, not the data.)
+        if catalog is None:
+            health = quality_agent.preflight(db_path)
+            result.data_health = health
+            if health["blocking"]:
+                bad = "; ".join(f"{f['name']} — {f['summary']}" for f in health["failures"]
+                                if f["severity"] == "critical")
+                result.clarification = (
+                    "⛔ Data-health gate: the warehouse is failing critical integrity checks "
+                    f"({bad}). I'm not running analyses that could push corrupt metrics downstream "
+                    "until that's resolved. Run `python -m agent.quality_agent` for the diagnosis "
+                    "and a proposed fix.")
+                return result
 
         # Inferential questions → fit a real model. Checked BEFORE triage so a specific model
         # question ("what predicts X adjusting for Y") isn't clarified away as vague.

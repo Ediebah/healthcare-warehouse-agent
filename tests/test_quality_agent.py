@@ -173,5 +173,28 @@ def test_run_report_diagnoses_and_proposes_for_each_failure(defect_db, monkeypat
 
 def test_make_demo_db_is_a_throwaway_never_the_real_warehouse(defect_db):
     assert Path(defect_db).exists()
+
+
+# ─────────────────────────────── pre-flight gate ───────────────────────────────
+def test_preflight_passes_a_healthy_warehouse(healthy_db):
+    h = qa.preflight(healthy_db, force=True)
+    assert h["healthy"] and not h["blocking"] and h["n_failed"] == 0
+
+
+def test_preflight_blocks_on_critical_defects(defect_db):
+    h = qa.preflight(defect_db, force=True)
+    assert not h["healthy"] and h["blocking"]
+    crit = {f["name"] for f in h["failures"] if f["severity"] == "critical"}
+    assert "Primary-key uniqueness" in crit and "Referential integrity" in crit
+
+
+def test_run_analysis_is_gated_by_a_broken_warehouse(defect_db, monkeypatch):
+    # a critical-integrity failure must block the analysis BEFORE any LLM call (no corrupt metrics out)
+    from agent import agent
+    monkeypatch.setattr(agent.llm, "complete", lambda *a, **k: pytest.fail("LLM called past the gate"))
+    monkeypatch.setattr(agent.llm, "complete_json", lambda *a, **k: pytest.fail("LLM called past the gate"))
+    r = agent.run_analysis("What is the 30-day readmission rate?", db_path=defect_db)
+    assert r.data_health and r.data_health["blocking"]
+    assert "Data-health gate" in (r.clarification or "")
     assert "dq_demo_" in defect_db                              # isolated temp dir
     assert Path(defect_db).resolve() != W.DB_PATH.resolve()    # never the project warehouse
