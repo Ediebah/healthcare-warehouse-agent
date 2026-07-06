@@ -52,6 +52,11 @@ EXAMPLE_GROUPS = {
         "What predicts 30-day readmission, adjusting for age and sex?",
         "What is the effect of insurance coverage on mortality, adjusting for age and income?",
     ],
+    "Focus on a specific condition": [
+        "How does survival differ for heart attack patients?",
+        "What predicts 30-day readmission among diabetic patients, adjusting for age and sex?",
+        "What is the total encounter cost for COPD patients?",
+    ],
     "Clinical trials — non-inferiority": [
         "Is the new antibiotic non-inferior to standard of care on cure rate (10-point margin)?",
         "Is the new device non-inferior to standard of care on cure rate (10-point margin)?",
@@ -622,8 +627,10 @@ def _data_dictionary() -> str:
             lines.append(f"- `{t['name']}` — {t['description'].split('.')[0][:110]}")
         lines.append("")
     lines.append("**You can ask for:** counts, rates, costs, averages, prevalence, comparisons by "
-                 "demographic (age / sex / race), or filter by a condition / medication name. "
-                 "Vague asks (e.g. *'show me the trends'*) get a clarifying question back.")
+                 "demographic (age / sex / race), or an analysis **focused on a specific disease** — "
+                 "name it in plain English (*heart attack*, *COPD*, *diabetes*, *hypertension*) and the "
+                 "agent maps it to the warehouse's coded conditions before filtering. Vague asks "
+                 "(e.g. *'show me the trends'*) get a clarifying question back.")
     return "\n".join(lines)
 
 

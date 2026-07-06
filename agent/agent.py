@@ -24,11 +24,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import guardrails, llm, modeling, retrieval
+from . import guardrails, llm, modeling, retrieval, vocabulary
 from .warehouse import QueryError, run_query
 
 MAX_SQL_TRIES = 4
 MAX_QUESTION_LEN = 2000
+# Below this cohort size an inferential model (survival/logistic/OLS) can't be fit reliably; a
+# named rare condition can resolve to a handful of patients, so we report the size honestly instead
+# of emitting the opaque "no usable predictors" screening message.
+_MIN_MODEL_COHORT = 30
 # Soft per-run wall-clock budget. With a 40s per-call timeout × 4 SDK retries × ~8-10 calls a single
 # run could otherwise hang for minutes; we check this before each major LLM step and bail cleanly.
 RUN_DEADLINE_S = 90.0
@@ -397,16 +401,14 @@ def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
 
 
 def _run_model(question: str, context: str, spec: dict, result: AgentResult, table_names: list[str],
-               db_path=None, deadline_start: float | None = None) -> AgentResult:
+               db_path=None, deadline_start: float | None = None, vocab=None) -> AgentResult:
     sql = _clean_sql(spec.get("analytic_sql", ""))
     result.hypothesis = spec.get("hypothesis", "")
     df = None
     for attempt in range(1, MAX_SQL_TRIES + 1):
         _check_deadline(deadline_start)
         try:
-            df = run_query(sql, max_rows=100000, db_path=db_path)   # full analytic dataset, not 1000 rows
-            result.attempts.append({"sql": sql, "error": None})
-            break
+            candidate = run_query(sql, max_rows=100000, db_path=db_path)   # full analytic set, not 1000 rows
         except QueryError as e:
             result.attempts.append({"sql": sql, "error": str(e)})
             if attempt == MAX_SQL_TRIES:
@@ -414,9 +416,34 @@ def _run_model(question: str, context: str, spec: dict, result: AgentResult, tab
                 result.error = f"Analytic SQL failed: {e}"
                 return result
             sql = _fix_sql(question, context, sql, str(e))
+            continue
+        # An inferential model needs a non-empty cohort. An empty result almost always means the
+        # condition/category filter matched nothing (e.g. an ILIKE on a term that isn't in the
+        # vocabulary) — self-heal with the resolved candidate patterns rather than fitting on 0 rows.
+        if len(candidate) == 0 and attempt < MAX_SQL_TRIES:
+            hint = vocab.heal_hint() if vocab is not None else (
+                "The query returned 0 rows — match clinical names with ILIKE on a *_description column.")
+            result.attempts.append({"sql": sql, "error": hint})
+            sql = _fix_sql(question, context, sql, hint)
+            continue
+        result.attempts.append({"sql": sql, "error": None if len(candidate)
+                                else f"returned an empty cohort after {attempt} attempt(s)"})
+        df = candidate
+        break
     result.sql = sql
     result.dataframe = df
     result.citations = _citations(sql, table_names)
+    # Guard: never fit a model on an empty cohort. Report the real reason (the filter matched no
+    # patients) instead of the misleading "no usable predictors remained" _fit_model would emit.
+    if df is None or len(df) == 0:
+        mr = modeling.ModelResult(
+            spec.get("model_type") or "?", spec.get("outcome", ""), 0, "",
+            error=("no patients matched the requested cohort, so there was nothing to model. The "
+                   "condition or filter may not exist in this warehouse — try a condition listed "
+                   "under 'What data can I ask about?', or broaden the criteria."))
+        result.model = mr.as_dict()
+        result.interpretation = f"**Findings**\nThe model could not be fit: {mr.error}"
+        return result
     try:
         mr = _fit_model(spec, df)
     except Exception as e:  # noqa: BLE001 — a malformed model spec must not crash the app
@@ -425,8 +452,16 @@ def _run_model(question: str, context: str, spec: dict, result: AgentResult, tab
     result.model = mr.as_dict()
     if not mr.error:
         _check_deadline(deadline_start)
-    result.interpretation = (f"**Findings**\nThe model could not be fit: {mr.error}"
-                             if mr.error else _interpret_model(question, mr))
+        result.interpretation = _interpret_model(question, mr)
+    elif len(df) < _MIN_MODEL_COHORT:
+        # A genuinely tiny cohort — often a rare condition surfaced by name (e.g. only a handful of
+        # patients have it). Say THAT plainly instead of the opaque "no usable predictors" message.
+        result.interpretation = (
+            f"**Findings**\nOnly {len(df):,} patient(s) match this cohort in the (synthetic) "
+            f"warehouse — too few to fit a reliable {mr.model_type} model, so no estimate is shown. "
+            "Try a broader condition or a larger comparison group.")
+    else:
+        result.interpretation = f"**Findings**\nThe model could not be fit: {mr.error}"
     return result
 
 
@@ -468,6 +503,17 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
         if _INJECTION.search(context):
             context = _CONTEXT_INJECTION_NOTE + context
 
+        # Ground plain-English condition names in the warehouse's real SNOMED descriptions so BOTH
+        # paths filter on values that exist (e.g. "heart attack" → "Myocardial infarction (disorder)",
+        # "COPD" → "Chronic obstructive bronchitis"). Demo warehouse only (resolve() no-ops for BYOD).
+        # If the question names ONLY a condition that isn't recorded here, answer honestly instead of
+        # silently fitting a model on an empty cohort.
+        vocab = vocabulary.resolve(question, catalog=catalog, db_path=db_path)
+        if vocab.blocked:
+            result.clarification = vocab.clarification()
+            return result
+        context += vocab.grounding_block()
+
         # Inferential questions → fit a real model. Checked BEFORE triage so a specific model
         # question ("what predicts X adjusting for Y") isn't clarified away as vague.
         if _MODEL_HINT.search(question):
@@ -477,7 +523,7 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
                 return _run_sample_size(question, spec, result, start)
             if spec.get("analytic_sql") and spec.get("model_type") not in (None, "", "aggregate"):
                 return _run_model(question, context, spec, result, retrieved["all_table_names"],
-                                  db_path, start)
+                                  db_path, start, vocab)
 
         _check_deadline(start)
         triage = _triage(question, context)
@@ -508,15 +554,18 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
             degen = (not empty) and (not degen_used) and _degenerate(candidate)
             if (empty or degen) and attempt < max_tries:         # self-heal on empty / null-aggregate
                 if empty:
-                    hint = ("Query executed but returned 0 rows. Reconsider the filters — e.g. match a "
-                            "clinical name with ILIKE on a *_description column, not equality on a "
-                            "*_code column; check the example values in the catalog.")
+                    # Cite the resolved condition vocabulary (real ILIKE patterns) so the retry
+                    # filters on values that exist instead of guessing another spelling.
+                    hint = vocab.heal_hint()
                 else:
                     degen_used = True
                     hint = ("The query returned a single all-zero/NULL aggregate — the filter likely "
                             "matched no rows. Check exact category values (e.g. gender is 'M'/'F', not "
                             "'female'; match clinical names with ILIKE on *_description). If 0 is "
                             "genuinely correct, return the same query.")
+                    if vocab.matched:                            # cite patterns that exist here
+                        hint += (" Real condition patterns in this warehouse: "
+                                 + "; ".join(f"'%{m.pattern}%'" for m in vocab.matched) + ".")
                 result.attempts.append({"sql": sql, "error": hint})
                 sql = _fix_sql(question, context, sql, hint)
                 continue
