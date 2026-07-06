@@ -39,21 +39,21 @@ def _reference(case) -> float:
     return float(run_query(case.reference_sql).iloc[0, 0])
 
 
-def _answer_cells(df) -> list[float]:
-    """The answer as a scalar (length-1 list), or [] if the result isn't a scalar answer.
+def _answer_cells(df, allow_multi: bool = False) -> list[float]:
+    """The scalar answer as a list of candidate cells, or [] if it isn't a single-row answer.
 
-    Every GOLD question has scalar ground truth, so a correct answer is a single row with a single
-    numeric column (label/string columns are fine). Requiring that — instead of scanning every
-    numeric cell of a possibly multi-row table — is what stops a wrong query that merely *contains*
-    the true value somewhere from scoring as correct.
+    Every GOLD question has scalar ground truth, so a correct answer is a single row. Non-rate answers
+    must be a single numeric column (scanning a multi-column/multi-row table would let a query that
+    merely *contains* the value pass). Rate answers are the exception: the statistical guardrail
+    REQUIRES a rate query to also select its numerator and denominator, so a correct rate result has
+    three numeric columns — `allow_multi=True` returns all of them and lets `_matches` find the rate.
     """
     if df is None or len(df) != 1:
         return []
     numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    if len(numeric) != 1:
+    if not numeric or (len(numeric) != 1 and not allow_multi):
         return []
-    col = df[numeric[0]].dropna()
-    return [float(col.iloc[0])] if len(col) else []
+    return [float(df[c].iloc[0]) for c in numeric if pd.notna(df[c].iloc[0])]
 
 
 def _matches(cells, ref, is_rate, rtol=0.02) -> bool:
@@ -89,7 +89,8 @@ def main() -> int:
         else:
             ref = _reference(c)
             res = run_analysis(c.question)
-            ok = res.error is None and _matches(_answer_cells(res.dataframe), ref, c.is_rate)
+            ok = res.error is None and _matches(
+                _answer_cells(res.dataframe, allow_multi=c.is_rate), ref, c.is_rate)
             f = _faithful(res)
             if f is not None:
                 faithful_total += 1

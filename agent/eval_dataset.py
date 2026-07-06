@@ -41,6 +41,19 @@ GOLD: list[Gold] = [
          "select count(*) from dim_provider", expected_tables=("dim_provider",)),
     Gold("n_female", "How many female patients are there?", "count",
          "select count(*) from dim_patient where gender = 'F'", expected_tables=("dim_patient",)),
+    # ---- condition (lay-term vocabulary grounding: the agent must map the spoken term to the real
+    #      SNOMED descriptions AND count DISTINCT patients, not sum per-description totals) ----
+    Gold("copd_patients", "How many patients have COPD?", "condition",
+         "select count(distinct f.patient_id) from fct_conditions f "
+         "join dim_condition c on f.condition_code = c.condition_code "
+         "where c.condition_description ilike '%chronic obstructive bronchitis%' "
+         "or c.condition_description ilike '%emphysema%'",
+         expected_tables=("fct_conditions", "dim_condition")),
+    Gold("heart_attack_patients", "How many patients have had a heart attack?", "condition",
+         "select count(distinct f.patient_id) from fct_conditions f "
+         "join dim_condition c on f.condition_code = c.condition_code "
+         "where c.condition_description ilike '%myocardial infarction%'",
+         expected_tables=("fct_conditions", "dim_condition")),
     # ---- cost ----
     Gold("avg_cost", "What is the average total claim cost per encounter?", "cost",
          "select round(avg(total_claim_cost), 2) from fct_encounters", expected_tables=("fct_encounters",)),

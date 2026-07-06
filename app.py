@@ -957,8 +957,8 @@ if result is not None:
     # ───────── data-lineage answer (no SQL / model — a "where does this come from?" question) ─────────
     if result.lineage is not None and result.model is None and not result.sql and result.dataframe is None:
         eyebrow("Data lineage")
-        st.markdown(f"<div class='card'>{result.interpretation}</div>", unsafe_allow_html=True)
-        _render_lineage(result.lineage)
+        st.markdown(result.interpretation)       # markdown (bold, ← chain) — NOT wrapped in raw HTML,
+        _render_lineage(result.lineage)          # else Streamlit won't process the ** / markdown inside
         st.stop()
 
     # ───────── inferential model view (adjusted effects) ─────────

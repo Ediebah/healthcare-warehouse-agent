@@ -49,3 +49,6 @@ agent/eval_history.jsonl
 # --- coverage artifacts ---
 .coverage
 htmlcov/
+
+# --- personal / generated documents (never commit to the public repo) ---
+*.docx
