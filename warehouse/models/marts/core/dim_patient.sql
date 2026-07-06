@@ -1,19 +1,31 @@
 -- dim_patient — conformed patient dimension. Grain: one row per patient. PK: patient_id.
 -- Business logic that staging deliberately skipped: derived age + clinical age bands.
--- Age uses coalesce(death_date, as_of_date) where as_of_date is a fixed var (default 2024-01-01),
--- so age/age_group are reproducible across rebuilds (not tied to wall-clock current_date).
--- Override at run time with: dbt build --vars '{as_of_date: YYYY-MM-DD}'.
+-- Age is measured to an "as-of" SNAPSHOT date = the latest date in the cohort (the moment the data
+-- was generated), so a living patient is never older than the snapshot and age can NEVER be negative
+-- -- Synthea, run in the generation year, produces newborns dated after any fixed calendar constant.
+-- It stays reproducible across rebuilds (derived from the fixed-seed data, not wall-clock now).
+-- Override with a fixed date via: dbt build --vars '{as_of_date: YYYY-MM-DD}'.
 
 with patients as (
     select * from {{ ref('stg_patients') }}
 ),
 
+as_of as (
+    -- an explicit var override wins; otherwise the latest date present in the cohort (max of birth /
+    -- death), which is >= every birth_date, so ages are guaranteed non-negative. greatest() ignores nulls.
+    select coalesce(
+        try_cast(nullif('{{ var("as_of_date", "") }}', '') as date),
+        greatest(max(birth_date), max(death_date))
+    ) as snapshot_date
+    from patients
+),
+
 with_age as (
     select
-        *,
-        -- age as of a fixed reference date (var, default 2024-01-01) so it's reproducible across rebuilds
-        floor(date_diff('day', birth_date, coalesce(death_date, cast('{{ var("as_of_date", "2024-01-01") }}' as date))) / 365.25) as age
-    from patients
+        p.*,
+        floor(date_diff('day', p.birth_date, coalesce(p.death_date, a.snapshot_date)) / 365.25) as age
+    from patients p
+    cross join as_of a
 )
 
 select

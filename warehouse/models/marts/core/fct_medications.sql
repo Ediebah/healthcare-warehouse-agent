@@ -31,5 +31,7 @@ select
     payer_coverage,
     dispenses,
     total_cost,
-    date_diff('day', dispense_start, dispense_stop)     as days_supplied   -- null if ongoing
+    case when dispense_stop >= dispense_start                     -- guard bad source rows (stop precedes start)
+         then date_diff('day', dispense_start, dispense_stop)
+    end                                                 as days_supplied   -- null if ongoing or invalid span
 from keyed

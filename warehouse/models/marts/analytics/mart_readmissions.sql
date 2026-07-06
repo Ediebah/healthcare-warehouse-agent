@@ -38,7 +38,11 @@ select
     encounter_start                                             as admission_date,
     encounter_stop                                              as discharge_date,
     next_admission_start,
-    date_diff('day', encounter_stop, next_admission_start)      as days_to_next_admission,
+    -- only a genuine post-discharge gap; overlapping / concurrent encounters (next admission starts
+    -- before discharge) have no meaningful "days to next", so leave null rather than expose a negative.
+    case when next_admission_start > encounter_stop
+         then date_diff('day', encounter_stop, next_admission_start)
+    end                                                         as days_to_next_admission,
     -- Readmission = next inpatient admission starts strictly AFTER discharge (timestamp compare, so
     -- sub-day negatives / same-day transfers are excluded) AND lands within a 1-30 day window.
     coalesce(

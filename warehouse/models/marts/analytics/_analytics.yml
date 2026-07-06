@@ -20,6 +20,12 @@ models:
       - name: is_30d_readmission
         description: "True if a subsequent inpatient admission occurred within 30 days of discharge."
         data_tests: [not_null]
+      - name: days_to_next_admission
+        description: "Days from discharge to the next inpatient admission; null when the next stay overlaps discharge (no clean gap)."
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
 
   - name: mart_cost_by_condition
     description: >
