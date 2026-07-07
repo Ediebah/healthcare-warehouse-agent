@@ -14,7 +14,7 @@ does none of that. I built it as a clinical data scientist working in biostatist
 
 Everything runs on synthetic EHR data, so there is no PHI and the whole project is public and reproducible.
 
-Live demo: [healthcare-warehouse-agent.streamlit.app](https://healthcare-warehouse-agent.streamlit.app).
+Live demo: [clinical-insight-agent.streamlit.app](https://clinical-insight-agent.streamlit.app).
 CI runs on every push: `dbt build`, 111 data tests, 117 unit tests, and the guardrail eval.
 
 ![Clinical Insight Agent: a natural-language answer rendered as KPI cards, a bar chart with Wilson 95% confidence-interval whiskers, self-verification, and the statistical guardrail (contrasts + FDR, confounding).](assets/dashboard.png)
