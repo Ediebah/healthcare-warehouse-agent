@@ -15,7 +15,6 @@ htmlcov
 RUNBOOK.md
 CONCEPTS.md
 GOVERNANCE.md
-.claude
 .remember
 
 # the full warehouse (200MB) — the app uses the committed slim demo DB instead

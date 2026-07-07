@@ -22,7 +22,6 @@ logs/
 warehouse/.user.yml
 
 # --- local agent / session tooling (not part of the portfolio) ---
-.claude/
 .remember/
 
 # --- secrets ---
