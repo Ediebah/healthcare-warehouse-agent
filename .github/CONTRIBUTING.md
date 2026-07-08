@@ -19,7 +19,7 @@ the model. Most of the checks run without a key.
 Run the same checks CI runs:
 
 ```bash
-.venv/bin/pytest                            # 124 unit tests, no key needed
+.venv/bin/pytest                            # 128 unit tests, no key needed
 ruff check .                                # lint
 .venv/bin/python -m agent.guardrail_eval    # deterministic guardrail eval, no key
 ```

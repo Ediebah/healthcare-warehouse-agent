@@ -914,6 +914,13 @@ def _render_model(m: dict) -> str:
             pv = t["p"]
             row.append("—" if pv != pv else f"{pv:.4f}" + (" ✳️" if pv < 0.05 else ""))
         lines.append("| " + " | ".join(row) + " |")
+    rb = m.get("robustness")
+    if rb:
+        icon = {"robust": "✅", "mostly robust": "◐", "fragile": "⚠️"}.get(rb.get("verdict"), "•")
+        lines += ["", f"{icon} **Specification robustness — {rb['verdict']}.** Refitting {rb['label']} "
+                  f"across {rb['n_specs']} defensible covariate sets (unadjusted, fully adjusted, "
+                  f"leave-one-out): significant and same-direction in {rb['n_significant']}/{rb['n_specs']}, "
+                  f"estimate {rb['estimate_min']:.3f}–{rb['estimate_max']:.3f}."]
     if m.get("issues"):
         lines.append("")
         lines += [f"- ⚠️ {iss}" for iss in m["issues"]]
