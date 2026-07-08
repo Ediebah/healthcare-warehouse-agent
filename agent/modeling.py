@@ -37,6 +37,7 @@ class ModelResult:
     series: list = field(default_factory=list)  # time-series points [{time,value,lower,upper,kind}]
     arms: list = field(default_factory=list)    # A/B arms [{arm,n,value,ci_low,ci_high,is_baseline,is_winner}]
     verdict: dict = field(default_factory=dict)  # experiment call {call, reason}
+    robustness: dict = field(default_factory=dict)  # specification-curve multiverse summary (adjusted models)
     issues: list = field(default_factory=list)   # flagged statistical issues (strings)
     fit_stat: str = ""
     note: str = ""
@@ -1145,6 +1146,113 @@ def calc_sample_size(kind: str = "superiority", outcome_type: str = "proportion"
         return ModelResult("sample_size", "sample size", 0, "n per arm", error=str(e))
 
 
+def _pretty_term(name: str) -> str:
+    """'C(sex)[T.M]' → 'sex = M'; a continuous predictor name is returned as-is."""
+    m = _CAT_TERM.match(str(name))
+    return f"{m.group('col')} = {m.group('lvl')}" if m else str(name)
+
+
+def _term_col(name: str) -> str:
+    """The source column behind a term name ('C(sex)[T.M]' → 'sex'; 'age' → 'age')."""
+    m = _CAT_TERM.match(str(name))
+    return m.group("col") if m else str(name)
+
+
+def specification_curve(model_type: str, df: pd.DataFrame, predictors: list[str], full: ModelResult, *,
+                        outcome: str | None = None, duration: str | None = None,
+                        event: str | None = None, max_specs: int = 12) -> dict:
+    """Specification-curve / multiverse robustness for an adjusted effect (logistic / OLS / Cox).
+
+    The garden of forking paths: the same data, analyzed with different-but-defensible covariate sets,
+    can give different conclusions, and a study usually reports just one path. This refits the SAME model
+    across a bounded, defensible multiverse of covariate choices — unadjusted, fully adjusted, and each
+    leave-one-covariate-out — and reports whether the HEADLINE effect (its sign and significance) holds
+    across all of them. Deterministic; no LLM. Returns {} when it can't run (no covariate to vary, no
+    identifiable headline term, or fewer than three specifications fit)."""
+    mt = "cox" if model_type in ("cox", "survival") else model_type
+    if mt not in ("logistic", "ols", "cox"):
+        return {}
+    null = 0.0 if mt == "ols" else 1.0
+    # headline = the term a reader would emphasize: the smallest-p, non-reference term of the full fit
+    cand = [t for t in full.terms if t.p == t.p and not str(t.name).endswith("(ref)")]
+    if not cand:
+        return {}
+    tracked = min(cand, key=lambda t: t.p).name
+    primary_col = _term_col(tracked)
+    covars = [p for p in predictors if p != primary_col]
+    if not covars:                                   # only the exposure itself → nothing to adjust away
+        return {}
+
+    subsampled = len(df) > 20000                     # keep ≤12 refits interactive on large cohorts
+    work = df.sample(20000, random_state=0) if subsampled else df
+
+    def _fit(cols):
+        if mt == "logistic":
+            return fit_logistic(work, outcome, cols)
+        if mt == "ols":
+            return fit_ols(work, outcome, cols)
+        return fit_cox(work, duration, event, cols)
+
+    def _primary(mr):                                # the tracked term in a refit (levels/ref are stable)
+        return next((t for t in mr.terms if t.name == tracked and t.estimate == t.estimate), None)
+
+    loo = covars[: max(0, max_specs - 2)]
+    truncated = len(loo) < len(covars)
+    specs = [("fully adjusted", list(predictors)), ("unadjusted", [primary_col])]
+    specs += [(f"drop {c}", [p for p in predictors if p != c]) for c in loo]
+    seen, uniq = set(), []                           # collapse identical covariate sets (with one covariate,
+    for label, cols in specs:                        # "unadjusted" and "drop <it>" are the same model)
+        key = tuple(sorted(cols))
+        if key not in seen:
+            seen.add(key); uniq.append((label, cols))
+    specs = uniq
+
+    records = []
+    for label, cols in specs:
+        t = _primary(_fit(cols))
+        if t is None:                                # the exposure was screened out in this spec — skip it
+            continue
+        records.append({"label": label, "estimate": float(t.estimate), "ci_low": float(t.ci_low),
+                        "ci_high": float(t.ci_high), "p": float(t.p),
+                        "significant": bool(t.p == t.p and t.p < 0.05)})
+    if len(records) < 2:                             # need the anchor plus at least one variation
+        return {}
+
+    fa = next((r for r in records if r["label"] == "fully adjusted"), records[0])
+    hdir = 1 if fa["estimate"] > null else -1
+    for r in records:
+        r["same_dir"] = (1 if r["estimate"] > null else -1) == hdir
+    ests = [r["estimate"] for r in records]
+    n_specs = len(records)
+    n_same = sum(r["same_dir"] for r in records)
+    n_sig = sum(1 for r in records if r["significant"] and r["same_dir"])
+    sign_stable = n_same == n_specs
+    agreement = n_sig / n_specs
+    verdict = ("robust" if sign_stable and n_sig == n_specs
+               else "mostly robust" if sign_stable and agreement >= 0.8
+               else "fragile")
+
+    pretty = _pretty_term(tracked)
+    lbl = f"the {full.effect_label} for {pretty}"
+    rng = f"{min(ests):.3f} to {max(ests):.3f}"
+    sub = " (on a 20,000-row subsample)" if subsampled else ""
+    summary = (f"{lbl} is {verdict} across {n_specs} defensible specifications{sub} (unadjusted, fully "
+               f"adjusted, leave-one-covariate-out): same direction in {n_same}/{n_specs}, significant and "
+               f"same-direction in {n_sig}/{n_specs}; estimate ranges {rng}.")
+    caveat = ""
+    if verdict == "fragile":
+        caveat = (f"Specification-fragile: {lbl} does not hold across the covariate multiverse — significant "
+                  f"and same-direction in only {n_sig} of {n_specs} defensible specifications, estimate "
+                  f"ranges {rng}. The headline may hinge on one covariate choice (the garden of forking "
+                  "paths); treat it as exploratory, not a stable finding.")
+    return {"label": pretty, "effect_label": full.effect_label, "null": null, "n_specs": n_specs,
+            "n_significant": n_sig, "n_same_direction": n_same, "agreement": round(agreement, 2),
+            "sign_stable": sign_stable, "estimate_min": float(min(ests)),
+            "estimate_median": float(np.median(ests)), "estimate_max": float(max(ests)),
+            "headline_estimate": float(fa["estimate"]), "verdict": verdict, "summary": summary,
+            "caveat": caveat, "truncated": truncated, "subsampled": subsampled, "specs": records}
+
+
 def render(r: ModelResult) -> str:
     if r.error:
         return f"model ({r.model_type}) could not be fit: {r.error}"
@@ -1170,6 +1278,8 @@ def render(r: ModelResult) -> str:
         p = "" if np.isnan(t.p) else f"  p={t.p:.4f}" + (" *" if t.p < 0.05 else "")
         cnt = (f"  n={t.n:,}" + (f", events={t.events:,}" if t.events is not None else "")) if t.n is not None else ""
         lines.append(f"  {t.name:22} {r.effect_label}={t.estimate:.3f}{cnt}{ci}{p}")
+    if r.robustness:
+        lines.append(f"  ROBUSTNESS: {r.robustness['summary']}")
     for iss in r.issues:
         lines.append(f"  ! {iss}")
     if r.note:

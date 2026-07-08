@@ -15,7 +15,7 @@ does none of that. I built it as a clinical data scientist working in biostatist
 Everything runs on synthetic EHR data, so there is no PHI and the whole project is public and reproducible.
 
 Live demo: [clinical-insight-agent.streamlit.app](https://clinical-insight-agent.streamlit.app).
-CI runs on every push: `dbt build`, 111 data tests, 124 unit tests, and the guardrail eval.
+CI runs on every push: `dbt build`, 111 data tests, 128 unit tests, and the guardrail eval.
 
 ![Clinical Insight Agent: a natural-language answer rendered as KPI cards, a bar chart with Wilson 95% confidence-interval whiskers, self-verification, and the statistical guardrail (contrasts + FDR, confounding).](assets/dashboard.png)
 
@@ -42,7 +42,7 @@ CI runs on every push: `dbt build`, 111 data tests, 124 unit tests, and the guar
   warehouse is failing a critical integrity test, so a broken pipeline can't quietly feed corrupt metrics
   into an analysis.
 - Built to run in production: the SQL engine is read-only, there is a live monitoring tab, an eval suite,
-  124 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
+  128 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
 
 ---
 
@@ -143,6 +143,13 @@ quasi-complete separation, proportional hazards (Schoenfeld residuals), non-line
 test), and heteroskedasticity (Breusch-Pagan). The random forest is trained inside a `scikit-learn` Pipeline
 with imputation fit per fold to avoid leakage, 5-fold cross-validation, and class balancing.
 
+For an adjusted model it then runs a specification-curve check: it refits the headline effect across a
+defensible covariate multiverse (unadjusted, fully adjusted, and each leave-one-covariate-out) and reports
+whether the result keeps its sign and significance across all of them, or is fragile to a single covariate
+choice. This is a direct, deterministic answer to the garden-of-forking-paths problem, where the same data
+analyzed a few reasonable ways can reach different conclusions, and a fragile headline is flagged as a
+caveat rather than presented as a stable finding.
+
 ### The statistical guardrail  (`agent/guardrails.py`), deterministic, no LLM
 Computed in code rather than by the model: Wilson score intervals per group; pairwise Newcombe difference
 intervals with two-proportion z-tests, corrected for multiplicity with Benjamini-Hochberg FDR; skew-aware
@@ -195,7 +202,7 @@ and 6 named metrics with their statistical caveats is generated from the dbt art
 readable to the agent, and a deterministic token-overlap RAG retrieves over it with no embedding calls.
 
 ### Engineering
-- 124 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
+- 128 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
   charts, agent helpers, modeling, condition-vocabulary grounding, data lineage, and the data-quality gate,
   plus `ruff` and a coverage gate, all run in CI.
 - GitHub Actions CI on every push: Synthea, then DuckDB, then `dbt build` (111 tests), then a catalog
@@ -238,7 +245,7 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
 .venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
-.venv/bin/pytest                           # 124 keyless unit tests   (ruff check . to lint)
+.venv/bin/pytest                           # 128 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -290,7 +297,7 @@ overridable with `OPENAI_MODEL`). CI runs on GitHub Actions; the app is packaged
 │   ├── charts.py, llm.py, observe.py, build_catalog.py
 │   └── eval*.py, guardrail_eval.py, eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       124 keyless pytest unit tests
+├── tests/                       128 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
 ├── Dockerfile, DEPLOY.md, GOVERNANCE.md

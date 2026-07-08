@@ -393,6 +393,8 @@ def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
         "- sample_size: LEAD with the required n per arm and total, then the assumptions (rates/effect, α, "
         "power, allocation); note it's a design-stage calculation on assumptions (not an analysis of "
         "data) and that you should inflate for expected dropout.\n"
+        "If a ROBUSTNESS line is present, state whether the headline effect held across the alternative "
+        "specifications; if it is fragile, lead the caveats with that.\n"
         "Use markdown headers:\n"
         "**Findings** — what the model shows.\n"
         "**Recommendation** — one actionable point (optional).\n"
@@ -451,6 +453,15 @@ def _run_model(question: str, context: str, spec: dict, result: AgentResult, tab
     except Exception as e:  # noqa: BLE001 — a malformed model spec must not crash the app
         mr = modeling.ModelResult(spec.get("model_type") or "?", spec.get("outcome", ""), 0, "",
                                   error=f"the model spec was missing a required field ({e}).")
+    # Specification-curve robustness: for an adjusted effect, refit across the covariate multiverse and
+    # report whether the headline holds (the garden of forking paths). Advisory — never break the analysis.
+    if not mr.error and mr.model_type in ("logistic", "ols", "cox", "survival") and mr.terms:
+        try:
+            mr.robustness = modeling.specification_curve(
+                mr.model_type, df, spec.get("predictors", []), mr,
+                outcome=spec.get("outcome"), duration=spec.get("duration"), event=spec.get("event"))
+        except Exception:  # noqa: BLE001
+            mr.robustness = {}
     result.model = mr.as_dict()
     if not mr.error:
         _check_deadline(deadline_start)

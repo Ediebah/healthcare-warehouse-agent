@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `pytest` passes locally (124 unit tests, no key needed)
+- [ ] `pytest` passes locally (128 unit tests, no key needed)
 - [ ] `ruff check .` is clean
 - [ ] If the warehouse changed, `dbt build` passes (111 data tests)
 - [ ] Tests added or updated for the change
