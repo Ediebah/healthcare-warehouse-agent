@@ -73,6 +73,11 @@ docker run --rm -p 8080:8080 -e OPENAI_API_KEY=sk-... clinical-agent
 ```
 
 ## Notes
+- **Streamlit Community Cloud: pin the app to Python 3.12** (Advanced settings at deploy time).
+  The dependency pins are verified on 3.12; on Cloud's Python 3.14 runtime the app boots but
+  **segfaults** during an analysis (a Linux cp314 C-extension wheel crash — the platform log shows
+  `Segmentation fault ... streamlit`). Changing Python requires recreating the app; the Docker path
+  is unaffected because the image pins `python:3.12-slim`.
 - **Never** bake the key into the image or commit `agent/.env` (it is git- and docker-ignored).
 - The full 200 MB warehouse is excluded via `.dockerignore`; the app queries the slim demo DB.
 - To refresh the demo data after a dbt model change: `cd warehouse && ../.venv/bin/dbt run --profiles-dir .`
