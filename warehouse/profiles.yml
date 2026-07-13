@@ -17,9 +17,12 @@ healthcare:
       schema: main          # models build here; raw source data lives in schema `raw`
       threads: 4
 
-    # Same models on Snowflake (the truthful "Snowflake" claim): `pip install dbt-snowflake`,
-    # set the env vars below, load the raw CSVs into a HEALTHCARE.RAW schema, then
-    # `dbt build --target prod`. Credentials come from the environment — nothing secret is committed.
+    # Snowflake connection SCAFFOLD — untested, and the models are currently DuckDB-dialect
+    # (date_diff, unnest(generate_series(...)), hash() semantics, GREATEST null handling), so
+    # `dbt build --target prod` will NOT compile as-is; a cross-dialect port is on the roadmap.
+    # To use it: `pip install dbt-snowflake`, set the env vars below, load the raw CSVs into a
+    # HEALTHCARE.RAW schema, and port the dialect-specific SQL. Credentials come from the
+    # environment — nothing secret is committed.
     prod:
       type: snowflake
       account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"

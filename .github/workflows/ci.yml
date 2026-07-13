@@ -5,15 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+# A superseded push's run is wasted compute — cancel it when a newer commit arrives.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   warehouse-and-guardrails:
     runs-on: ubuntu-latest
+    timeout-minutes: 30          # a hung download/build must not burn the 6h default
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - uses: actions/setup-java@v4
         with:
@@ -29,10 +36,12 @@ jobs:
           pytest --cov=agent --cov-report=term-missing
 
       - name: Generate a small, reproducible Synthea dataset
+        # Pinned release (NOT master-branch-latest, a moving target that can break CI with no code
+        # change and silently varies the generated data over time). Bump deliberately.
         run: |
           mkdir -p synthea data          # these dirs are git-ignored (empty) → recreate on checkout
           curl -L --fail -o synthea/synthea-with-dependencies.jar \
-            https://github.com/synthetichealth/synthea/releases/download/master-branch-latest/synthea-with-dependencies.jar
+            https://github.com/synthetichealth/synthea/releases/download/v4.0.0/synthea-with-dependencies.jar
           cd synthea
           java -jar synthea-with-dependencies.jar \
             --exporter.csv.export true --exporter.fhir.export false \
@@ -41,7 +50,7 @@ jobs:
       - name: Load raw CSVs into DuckDB
         run: python scripts/load_raw.py
 
-      - name: dbt build (models + 90 data tests)
+      - name: dbt build (models + data tests)
         working-directory: warehouse
         run: |
           dbt deps

@@ -15,7 +15,12 @@ htmlcov
 RUNBOOK.md
 CONCEPTS.md
 GOVERNANCE.md
+INTERVIEW.md
+LINKEDIN.md
+DEPLOY.md
+*.docx
 .remember
+.claude
 
 # the full warehouse (200MB) — the app uses the committed slim demo DB instead
 data/healthcare.duckdb

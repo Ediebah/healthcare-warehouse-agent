@@ -16,11 +16,13 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 # Coverage gate for the agent package (CI runs `pytest --cov=agent`). Set below the current level
-# (~57%) so it catches regressions with headroom; ratchet up as the LLM-path tests grow.
+# (~64%) so it catches regressions with headroom — a 14-point-loose gate lets a whole test file
+# vanish silently; ratchet up as the LLM-path tests grow. app.py is covered by an AppTest smoke
+# test rather than this gate.
 [tool.coverage.run]
 source = ["agent"]
 
 [tool.coverage.report]
-fail_under = 50
+fail_under = 60
 show_missing = true
 exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:", "raise NotImplementedError"]

@@ -1,5 +1,10 @@
 # Clinical Insight Agent: an AI data scientist over a dbt warehouse
 
+[![CI](https://github.com/Ediebah/healthcare-warehouse-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Ediebah/healthcare-warehouse-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
+[![Live demo](https://img.shields.io/badge/demo-live-FF4B4B?logo=streamlit&logoColor=white)](https://clinical-insight-agent.streamlit.app)
+
 An AI agent that runs end-to-end data science over a dbt-modeled healthcare warehouse. It is not a
 text-to-SQL tool. You ask a question in plain English, and it pulls the right schema context, decides
 which statistical model the question actually needs (survival, adjusted regression, causal,
@@ -15,9 +20,29 @@ does none of that. I built it as a clinical data scientist working in biostatist
 Everything runs on synthetic EHR data, so there is no PHI and the whole project is public and reproducible.
 
 Live demo: [clinical-insight-agent.streamlit.app](https://clinical-insight-agent.streamlit.app).
-CI runs on every push: `dbt build`, 111 data tests, 128 unit tests, and the guardrail eval.
+CI runs on every push: `dbt build`, 108 data tests, 151 unit tests, and the guardrail eval.
 
 ![Clinical Insight Agent: a natural-language answer rendered as KPI cards, a bar chart with Wilson 95% confidence-interval whiskers, self-verification, and the statistical guardrail (contrasts + FDR, confounding).](assets/dashboard.png)
+
+---
+
+## Quickstart (about a minute)
+
+The repo ships a slim demo warehouse (`data/healthcare_demo.duckdb`), so the app runs immediately:
+no Java, no Synthea, no dbt build.
+
+```bash
+git clone https://github.com/Ediebah/healthcare-warehouse-agent && cd healthcare-warehouse-agent
+uv venv --python 3.12 && uv pip install -r requirements.txt
+cp agent/.env.example agent/.env       # add OPENAI_API_KEY, or run a free local model (see below)
+.venv/bin/streamlit run app.py
+```
+
+The dashboard, lineage tracing, and monitoring/data-quality tabs work with no key at all. Asking the
+agent questions needs `OPENAI_API_KEY` in `agent/.env`, or any OpenAI-compatible endpoint: with
+[Ollama](https://ollama.com), `ollama pull llama3.1`, then set `OPENAI_BASE_URL=http://localhost:11434/v1`
+and `OPENAI_MODEL=llama3.1` (no key, no cost, fully private). To regenerate the data and rebuild the
+warehouse from scratch, see [Run it locally](#run-it-locally-full-rebuild).
 
 ---
 
@@ -42,7 +67,7 @@ CI runs on every push: `dbt build`, 111 data tests, 128 unit tests, and the guar
   warehouse is failing a critical integrity test, so a broken pipeline can't quietly feed corrupt metrics
   into an analysis.
 - Built to run in production: the SQL engine is read-only, there is a live monitoring tab, an eval suite,
-  128 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
+  151 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
 
 ---
 
@@ -59,7 +84,7 @@ flowchart TB
         SY["Synthea · Java<br/>seed 12345 · 1,139 patients"] -->|generate| CSV["raw CSVs<br/>10 source tables"] -->|load| RAW["DuckDB<br/>raw schema · faithful VARCHAR"]
     end
 
-    subgraph WH["2 · dbt warehouse: 26 models · 111 data tests · docs on every model"]
+    subgraph WH["2 · dbt warehouse: 26 models · 108 data tests · docs on every model"]
         direction LR
         STG["staging<br/>10 stg_ views"] --> CORE["core · star schema<br/>6 dim_ + 5 fct_"] --> ANA["analytics<br/>5 mart_"]
     end
@@ -196,16 +221,16 @@ non-sensitive data only, since column names and a few example values are sent to
 
 ### The warehouse  (`warehouse/`)
 `dbt-core` with `dbt-duckdb` and `dbt_utils`, 26 models across staging, a core star schema, and analytics
-marts, with 111 data tests and docs on every model. [Synthea](https://github.com/synthetichealth/synthea)
+marts, with 108 data tests and docs on every model. [Synthea](https://github.com/synthetichealth/synthea)
 generates 1,139 synthetic patients reproducibly (seed 12345). A semantic catalog covering 16 modeled tables
 and 6 named metrics with their statistical caveats is generated from the dbt artifacts to make the warehouse
 readable to the agent, and a deterministic token-overlap RAG retrieves over it with no embedding calls.
 
 ### Engineering
-- 128 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
+- 151 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
   charts, agent helpers, modeling, condition-vocabulary grounding, data lineage, and the data-quality gate,
   plus `ruff` and a coverage gate, all run in CI.
-- GitHub Actions CI on every push: Synthea, then DuckDB, then `dbt build` (111 tests), then a catalog
+- GitHub Actions CI on every push: Synthea, then DuckDB, then `dbt build` (108 tests), then a catalog
   regenerate, then the guardrail eval.
 - An eval suite over a 35-case labeled `GOLD` set: answer accuracy, retrieval precision/recall/MRR (keyless),
   guardrail precision/recall (keyless and deterministic), and an LLM-as-a-judge check for factual consistency
@@ -223,10 +248,12 @@ readable to the agent, and a deterministic token-overlap RAG retrieves over it w
 
 ---
 
-## Try it / run locally
+## Run it locally (full rebuild)
 
-Prereqs: `git`, [`uv`](https://docs.astral.sh/uv/), a JDK 17+ (only needed to regenerate data), and an
-OpenAI key (or a local model, see below).
+The [Quickstart](#quickstart-about-a-minute) above runs on the committed demo warehouse. This path
+regenerates everything from scratch: synthetic patients, the raw load, the full dbt build, and the
+semantic catalog. Prereqs: `git`, [`uv`](https://docs.astral.sh/uv/), a JDK 17+ (only needed to
+regenerate data), and an OpenAI key (or a local model, see below).
 
 ```bash
 # 1. Environment (dev = app + dbt; the deployed app installs only requirements.txt)
@@ -245,7 +272,7 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
 .venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
-.venv/bin/pytest                           # 128 keyless unit tests   (ruff check . to lint)
+.venv/bin/pytest                           # 151 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -297,12 +324,26 @@ overridable with `OPENAI_MODEL`). CI runs on GitHub Actions; the app is packaged
 │   ├── charts.py, llm.py, observe.py, build_catalog.py
 │   └── eval*.py, guardrail_eval.py, eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       128 keyless pytest unit tests
+├── tests/                       151 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
-├── Dockerfile, DEPLOY.md, GOVERNANCE.md
+├── Dockerfile, DEPLOY.md
 └── data/healthcare_demo.duckdb  slim marts DB for the deployed demo (committed)
 ```
+
+---
+
+## Roadmap
+
+- FHIR ingestion alongside the CSV path, so standard-format (still synthetic) bundles flow through the
+  same star schema
+- More model families: mixed-effects/GEE for repeated measures, competing-risks survival
+- OpenTelemetry traces for the agent loop (today: JSONL logs plus the monitoring tab)
+- A tested Postgres/Snowflake warehouse target (the models are currently DuckDB-dialect)
+- Versioned releases, with the demo warehouse published as a release asset to keep clones slim
+
+Issues and PRs are welcome; see [CONTRIBUTING](.github/CONTRIBUTING.md). Look for `good first issue`
+labels if you want an on-ramp.
 
 ---
 

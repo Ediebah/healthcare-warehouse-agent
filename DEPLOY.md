@@ -75,4 +75,7 @@ docker run --rm -p 8080:8080 -e OPENAI_API_KEY=sk-... clinical-agent
 ## Notes
 - **Never** bake the key into the image or commit `agent/.env` (it is git- and docker-ignored).
 - The full 200 MB warehouse is excluded via `.dockerignore`; the app queries the slim demo DB.
-- To refresh the demo data after dbt model changes, rebuild it and re-commit (see the project runbook).
+- To refresh the demo data after a dbt model change: `cd warehouse && ../.venv/bin/dbt run --profiles-dir .`
+  (rebuilds `data/healthcare.duckdb`), then copy the changed tables into `data/healthcare_demo.duckdb`
+  (ATTACH the full DB read-only, `CREATE OR REPLACE TABLE main.<t> AS SELECT * FROM src.main.<t>`,
+  `CHECKPOINT`) and re-commit the demo file — the deployed app reads only the committed demo DB.

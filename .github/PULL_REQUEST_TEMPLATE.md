@@ -4,9 +4,9 @@
 
 ## Checklist
 
-- [ ] `pytest` passes locally (128 unit tests, no key needed)
+- [ ] `pytest` passes locally (the full unit-test suite, no key needed)
 - [ ] `ruff check .` is clean
-- [ ] If the warehouse changed, `dbt build` passes (111 data tests)
+- [ ] If the warehouse changed, `dbt build` passes (all data tests)
 - [ ] Tests added or updated for the change
 - [ ] No real patient data, PHI, or secrets added anywhere
 - [ ] The statistical guardrail stays deterministic (no LLM-invented numbers, no dropped caveats)
