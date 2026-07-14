@@ -571,7 +571,9 @@ values. The prior panel implements FDA's sensitivity requirement."
   - `go_grid_binary(prior: Prior, n: int, rule: DecisionRule) -> np.ndarray` — `go[x] == 1` iff observing x successes in n yields GO
   - `assurance(prior: Prior, n_planned: int, rule: DecisionRule, sd: float | None = None) -> float`
   - `operating_characteristics(prior, n_planned, rule, sd=None, grid=None) -> list[dict]` — `[{"theta": float, "go_rate": float}, ...]`
-  - `type_i_and_power(oc: list[dict], rule: DecisionRule) -> tuple[float, float]`
+  - `type_i_and_power(prior: Prior, n_planned: int, rule: DecisionRule, sd: float | None = None) -> tuple[float, float]`
+    — evaluates the GO rate EXACTLY at the LRV and the TV (an earlier nearest-grid-point version
+    misreported power by up to 3 points for off-grid thresholds; do not reintroduce it)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1077,7 +1079,7 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
 
         assur = _bayes.assurance(prior, n_planned, rule, sd)
         oc = _bayes.operating_characteristics(prior, n_planned, rule, sd)
-        t1, power = _bayes.type_i_and_power(oc, rule)
+        t1, power = _bayes.type_i_and_power(prior, n_planned, rule, sd)
         panel, fragile = _sensitivity(prior, n_planned, rule, sd)
 
         params = {"endpoint_type": endpoint_type, "framing": framing, "n_planned": n_planned,
