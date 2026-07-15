@@ -466,3 +466,37 @@ def _finish(chart, height: int, title: str = "", width=None):
             .configure_view(strokeWidth=0)
             .configure_legend(labelColor=MUTED, titleColor=MUTED, labelFontSize=12)
             .configure_title(color=_TITLE, fontSize=14, anchor="start", font="IBM Plex Sans"))
+
+
+def assurance_curve_chart(model: dict):
+    """Assurance (probability of success) against planned sample size: how much n buys how much
+    confidence. The design-stage counterpart of the power curve."""
+    if not model or model.get("error") or not model.get("series"):
+        return None
+    d = pd.DataFrame(model["series"])
+    if "assurance" not in d or "n" not in d:
+        return None
+    line = alt.Chart(d).mark_line(color=TEAL, strokeWidth=2,
+                                  point=alt.OverlayMarkDef(color=TEAL)).encode(
+        x=alt.X("n:Q", title="planned sample size"),
+        y=alt.Y("assurance:Q", title="assurance (probability of success)",
+                axis=alt.Axis(format="%"), scale=alt.Scale(domain=[0, 1])),
+        tooltip=["n:Q", alt.Tooltip("assurance:Q", format=".1%")])
+    return _finish(line, 300, "Assurance vs planned sample size")
+
+
+def oc_curve_chart(model: dict):
+    """Operating characteristics: the GO rate at each TRUE effect. FDA's second pillar -- how the
+    design behaves across a plausible range of truths, not just the one you hope for."""
+    oc = (model or {}).get("robustness", {}).get("oc")
+    if not oc:
+        return None
+    d = pd.DataFrame(oc)
+    if "theta" not in d or "go_rate" not in d:
+        return None
+    line = alt.Chart(d).mark_line(color=TEAL, strokeWidth=2).encode(
+        x=alt.X("theta:Q", title="true effect"),
+        y=alt.Y("go_rate:Q", title="probability of a GO", axis=alt.Axis(format="%"),
+                scale=alt.Scale(domain=[0, 1])),
+        tooltip=[alt.Tooltip("theta:Q", format=".3f"), alt.Tooltip("go_rate:Q", format=".1%")])
+    return _finish(line, 260, "Operating characteristics (GO rate by true effect)")

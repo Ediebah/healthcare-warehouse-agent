@@ -39,6 +39,14 @@ _METHOD_BLURB = {
     "sample_size": "Design-stage sample-size / power calculation (normal approximation for "
                    "proportions, t-test power for means).",
     "association": "Descriptive association summary with confidence intervals.",
+    "assurance": "Bayesian design-stage go/no-go. Assurance (the probability of a GO, averaged over "
+                 "the prior uncertainty about the true effect) with a dual-criterion decision rule "
+                 "(Target Value / Lower Reference Value), a prior-sensitivity panel, and simulated "
+                 "operating characteristics. Conjugate Beta-Binomial; computed in closed form.",
+    "interim": "Bayesian interim go/no-go. Posterior response rate with a 95% credible interval and "
+               "the exact predictive probability that the trial ends in a GO at full enrolment, "
+               "against a dual-criterion decision rule. Conjugate Beta-Binomial; computed in closed "
+               "form (no simulation).",
 }
 
 
@@ -248,6 +256,16 @@ def build_docx(result, *, when: _dt.datetime | None = None) -> bytes:
                "review only. It is a machine-generated draft and must not be used for a regulatory "
                "submission or clinical decision without qualified biostatistical review.")
 
+    _ps = m.get("prespec") or {}
+    if _ps.get("status"):
+        _kv(doc, "Pre-specification", _ps["status"])
+        if _ps.get("drift"):
+            doc.add_paragraph("Departures from the locked design: "
+                              + "; ".join(f"{d['field']}: locked {d['locked']} -> used {d['actual']}"
+                                          for d in _ps["drift"]))
+        if (_ps.get("lock") or {}).get("lock_id"):     # interim without a lock stores lock=None
+            _kv(doc, "Design lock", _ps["lock"]["lock_id"][:16])
+
     doc.add_heading("Approval / review", 2)
     doc.add_paragraph("This draft requires review and sign-off before use:")
     _sig_line(doc, "Prepared by")
@@ -341,6 +359,34 @@ def build_docx(result, *, when: _dt.datetime | None = None) -> bytes:
             c[0].text, c[1].text = p["time"][:10], f"{p['value']:.1f}"
             c[2].text = f"[{p['lower']:.1f}, {p['upper']:.1f}]"
         _footnote(doc, "The band widens with horizon and is residual-based (approximate, not exact).")
+    elif mt in ("assurance", "interim"):
+        v = m.get("verdict", {})
+        if mt == "assurance":
+            _kv(doc, "Assurance (probability of success)", f"{v.get('assurance', 0):.1%}")
+            _kv(doc, "Power at the Target Value", f"{v.get('power', 0):.1%}")
+        else:
+            _kv(doc, "Predictive probability of success", f"{v.get('predictive_prob', 0):.1%}")
+            _kv(doc, "Posterior response rate", f"{v.get('posterior_mean', 0):.1%}")
+        rb = m.get("robustness") or {}
+        if rb.get("panel"):
+            table_caption("Prior sensitivity: the verdict under each defensible prior. A verdict that "
+                          "flips across priors is prior-driven, not data-driven.")
+            pt = doc.add_table(rows=1, cols=4); pt.style = "Table Grid"
+            for j, h in enumerate(["Prior", "Parameters", "Assurance", "Verdict"]):
+                pt.rows[0].cells[j].text = h
+            for row in rb["panel"]:
+                c = pt.add_row().cells
+                c[0].text = str(row["prior"]); c[1].text = str(row["params"])
+                c[2].text = f"{row['assurance']:.1%}"; c[3].text = str(row["call"])
+            _footnote(doc, "FDA's Jan-2026 draft Bayesian guidance requires a prior-sensitivity "
+                           "analysis. A FRAGILE verdict is reported as fragile, not as an answer.")
+        if rb.get("type_i_error") is not None:
+            table_caption("Operating characteristics implied by the pre-specified decision rule.")
+            ot = doc.add_table(rows=1, cols=2); ot.style = "Table Grid"
+            ot.rows[0].cells[0].text = "Quantity"; ot.rows[0].cells[1].text = "Value"
+            for k, val in [("Type I error (GO rate at the LRV)", rb["type_i_error"]),
+                           ("Power (GO rate at the TV)", rb["power"])]:
+                c = ot.add_row().cells; c[0].text = k; c[1].text = f"{val:.1%}"
     elif m.get("arms"):
         binm = all(0 <= a["value"] <= 1 for a in m["arms"])
         table_caption("Per-arm summary with 95% confidence intervals.")

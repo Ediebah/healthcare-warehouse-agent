@@ -13,6 +13,10 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import pandas as pd
+from scipy import stats
+
+from . import bayes as _bayes
+from . import prespec as _prespec
 
 
 @dataclass
@@ -38,6 +42,7 @@ class ModelResult:
     arms: list = field(default_factory=list)    # A/B arms [{arm,n,value,ci_low,ci_high,is_baseline,is_winner}]
     verdict: dict = field(default_factory=dict)  # experiment call {call, reason}
     robustness: dict = field(default_factory=dict)  # specification-curve multiverse summary (adjusted models)
+    prespec: dict = field(default_factory=dict)     # pre-specification lock status {status, lock, drift}
     issues: list = field(default_factory=list)   # flagged statistical issues (strings)
     fit_stat: str = ""
     note: str = ""
@@ -1368,12 +1373,26 @@ def render(r: ModelResult) -> str:
             tag = " (control)" if a.get("is_baseline") else (" ←" if a.get("is_winner") else "")
             val = f"{a['value'] * 100:.1f}%" if binm else f"{a['value']:.2f}"
             lines.append(f"  {a['arm']:16} n={a['n']:,}  {val}{tag}")
+    if r.model_type in ("assurance", "interim") and r.verdict:
+        lines.append(f"  VERDICT: {r.verdict.get('call')} — {r.verdict.get('reason')}")
+        for k in ("assurance", "power", "predictive_prob", "posterior_mean"):
+            if r.verdict.get(k) is not None:
+                lines.append(f"  {k}: {r.verdict[k]:.1%}")
+        panel = r.robustness.get("panel") or []
+        if panel:
+            lines.append("  PRIOR SENSITIVITY: " + "; ".join(
+                f"{row['prior']} -> {row['call']} (assurance {row['assurance']:.0%})" for row in panel))
+        if r.robustness.get("type_i_error") is not None:
+            lines.append(f"  OPERATING CHARACTERISTICS: type I error {r.robustness['type_i_error']:.1%}, "
+                         f"power {r.robustness['power']:.1%}")
+        if r.prespec.get("status"):
+            lines.append(f"  PRE-SPECIFICATION: {r.prespec['status']}")
     for t in r.terms:
         ci = "" if np.isnan(t.ci_low) else f"  95% CI [{t.ci_low:.3f}, {t.ci_high:.3f}]"
         p = "" if np.isnan(t.p) else f"  p={t.p:.4f}" + (" *" if t.p < 0.05 else "")
         cnt = (f"  n={t.n:,}" + (f", events={t.events:,}" if t.events is not None else "")) if t.n is not None else ""
         lines.append(f"  {t.name:22} {r.effect_label}={t.estimate:.3f}{cnt}{ci}{p}")
-    if r.robustness:
+    if r.robustness.get("summary"):          # spec-curve shape only; the go/no-go dict has no summary
         lines.append(f"  ROBUSTNESS: {r.robustness['summary']}")
     for iss in r.issues:
         lines.append(f"  ! {iss}")
@@ -1383,3 +1402,246 @@ def render(r: ModelResult) -> str:
 
 
 DISPATCH = {"logistic": fit_logistic, "ols": fit_ols, "cox": fit_cox, "association": test_association}
+
+
+# ── Bayesian go/no-go ─────────────────────────────────────────────────────────────────────────────
+def _build_prior(endpoint_type, tv, lrv, prior_successes, prior_n, prior_a, prior_b,
+                 prior_mu, prior_sd) -> _bayes.Prior:
+    """The informed prior, from a previous study if the question supplied one, else weakly informative."""
+    if endpoint_type == "mean":
+        if prior_mu is None:
+            return _bayes.Prior("Vague", "normal", (float(lrv), 10.0 * (abs(tv - lrv) or 1.0)),
+                                "Weakly informative (no prior study supplied); centred at the LRV.")
+        return _bayes.Prior("Informed", "normal", (float(prior_mu), float(prior_sd or 1.0)),
+                            f"Supplied prior: mean {prior_mu:g}, SD {prior_sd:g}.")
+    if prior_a is not None and prior_b is not None:
+        return _bayes.Prior("Informed", "beta", (float(prior_a), float(prior_b)),
+                            f"Supplied prior: Beta({prior_a:g}, {prior_b:g}).")
+    if prior_successes is not None and prior_n is not None:
+        a, b = _bayes.beta_posterior(1.0, 1.0, int(prior_successes), int(prior_n))
+        return _bayes.Prior("Phase-I informed", "beta", (a, b),
+                            f"Beta({a:g}, {b:g}), from a uniform prior updated with the previous study: "
+                            f"{int(prior_successes)} responses in {int(prior_n)} patients.")
+    return _bayes.Prior("Vague", "beta", (1.0, 1.0),
+                        "Uniform Beta(1,1) (no prior study supplied): every response rate equally likely.")
+
+
+def _sensitivity(prior, n_planned, rule, sd) -> tuple[list[dict], bool]:
+    """Re-decide under each defensible prior. A verdict that flips is FRAGILE, not an answer."""
+    rows, calls = [], []
+    for p in _bayes.prior_panel(prior, rule):
+        if p.kind == "beta":
+            a, b = p.params
+            p_tv = _bayes.prob_exceeds("beta", a, b, rule.tv, rule.higher_is_better)
+            p_lrv = _bayes.prob_exceeds("beta", a, b, rule.lrv, rule.higher_is_better)
+        else:
+            mu, s = p.params
+            p_tv = _bayes.prob_exceeds("normal", mu, s, rule.tv, rule.higher_is_better)
+            p_lrv = _bayes.prob_exceeds("normal", mu, s, rule.lrv, rule.higher_is_better)
+        call, _ = _bayes.decide(float(p_tv), float(p_lrv), rule)
+        rows.append({"prior": p.name, "params": [round(float(v), 3) for v in p.params],
+                     "assurance": round(_bayes.assurance(p, n_planned, rule, sd), 4),
+                     "call": call, "provenance": p.provenance})
+        calls.append(call)
+    return rows, len(set(calls)) > 1
+
+
+def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm",
+                   n_planned=None, tv=None, lrv=None,
+                   gate_tv: float = 0.80, gate_lrv: float = 0.90, stop_lrv: float = 0.10,
+                   higher_is_better: bool = True,
+                   prior_successes=None, prior_n=None, prior_a=None, prior_b=None,
+                   prior_mu=None, prior_sd=None, sd=None, anchor=None) -> ModelResult:
+    """Design-stage Bayesian go/no-go: the probability this trial ends in GO, before it runs.
+
+    Classical power asks "what is the chance of success IF the true effect is exactly X". Assurance
+    asks the question a decision-maker actually has: "given everything we believe about X, what is the
+    chance this trial succeeds?" It is usually the lower, more honest number.
+    """
+    def _err(msg):
+        return ModelResult("assurance", "go/no-go", 0, "probability of success", error=msg)
+    try:
+        if n_planned is None or tv is None or lrv is None:
+            return _err("an assurance calculation needs a planned sample size, a target value (TV), "
+                        "and a lower reference value (LRV).")
+        n_planned = int(n_planned)
+        tv, lrv = float(tv), float(lrv)
+        if n_planned <= 0:
+            return _err("the planned sample size must be positive.")
+        if endpoint_type == "proportion" and not (0 <= tv <= 1 and 0 <= lrv <= 1):
+            return _err("for a proportion endpoint the TV and LRV must be between 0 and 1 "
+                        "(express 30% as 0.30).")
+        if higher_is_better and lrv > tv:
+            return _err("the LRV must not exceed the TV: the minimum worth pursuing cannot be more "
+                        "ambitious than the value you hope for.")
+        if not higher_is_better and tv > lrv:
+            return _err("with a lower-is-better endpoint the TV must not exceed the LRV.")
+
+        rule = _bayes.DecisionRule(tv=tv, lrv=lrv, gate_tv=float(gate_tv), gate_lrv=float(gate_lrv),
+                                   stop_lrv=float(stop_lrv), higher_is_better=bool(higher_is_better))
+        prior = _build_prior(endpoint_type, tv, lrv, prior_successes, prior_n,
+                             prior_a, prior_b, prior_mu, prior_sd)
+
+        # the verdict, from the prior alone -- this is a DESIGN question, there is no data yet
+        a1, a2 = prior.params
+        p_tv = float(_bayes.prob_exceeds(prior.kind, a1, a2, tv, higher_is_better))
+        p_lrv = float(_bayes.prob_exceeds(prior.kind, a1, a2, lrv, higher_is_better))
+        call, reason = _bayes.decide(p_tv, p_lrv, rule)
+
+        assur = _bayes.assurance(prior, n_planned, rule, sd)
+        oc = _bayes.operating_characteristics(prior, n_planned, rule, sd)
+        t1, power = _bayes.type_i_and_power(prior, n_planned, rule, sd)
+        panel, fragile = _sensitivity(prior, n_planned, rule, sd)
+
+        params = {"endpoint_type": endpoint_type, "framing": framing, "n_planned": n_planned,
+                  "tv": tv, "lrv": lrv, "gate_tv": gate_tv, "gate_lrv": gate_lrv,
+                  "stop_lrv": stop_lrv, "higher_is_better": higher_is_better,
+                  "prior_a": a1 if prior.kind == "beta" else None,
+                  "prior_b": a2 if prior.kind == "beta" else None,
+                  "prior_mu": a1 if prior.kind == "normal" else None,
+                  "prior_sd": a2 if prior.kind == "normal" else None}
+        lock = _prespec.create_lock(params, oc, anchor=anchor)
+
+        mr = ModelResult("assurance", "go/no-go", n_planned, "probability of success",
+                         fit_stat=f"assurance={assur:.1%} · n={n_planned:,} · TV={tv:g} / LRV={lrv:g}",
+                         note="Design-stage Bayesian go/no-go. Assurance averages the chance of "
+                              "success over the prior uncertainty about the true effect; it is not a "
+                              "prediction about any one trial. Synthetic data.")
+        mr.verdict = {"call": call, "reason": reason, "assurance": round(assur, 4),
+                      "power": round(power, 4)}
+        mr.series = [{"n": int(nn), "assurance": round(_bayes.assurance(prior, int(nn), rule, sd), 4)}
+                     for nn in np.unique(np.linspace(10, max(20, n_planned * 2), 20).astype(int))]
+        mr.robustness = {"panel": panel, "fragile": fragile, "oc": oc, "framing": framing,
+                         "type_i_error": round(t1, 4), "power": round(power, 4)}
+        mr.prespec = {"status": "PRE-SPECIFIED", "lock": lock, "drift": []}
+
+        issues = [_prespec.caveat({"status": "PRE-SPECIFIED", "drift": []}),
+                  f"Prior: {prior.provenance}"]
+        if fragile:
+            flips = ", ".join(f"{r['prior']} -> {r['call']}" for r in panel)
+            issues.append(f"FRAGILE: the verdict is not stable across defensible priors ({flips}). "
+                          "A skeptical reader would not yet be convinced; this is a prior-driven call, "
+                          "not a data-driven one.")
+        else:
+            issues.append(f"Prior sensitivity: the {call} verdict HOLDS across all four defensible "
+                          "priors (informed, vague, skeptical, enthusiastic).")
+        issues.append(f"Operating characteristics: type I error {t1:.1%} (the chance of a GO when the "
+                      f"true effect is only at the LRV) and power {power:.1%} (the chance of a GO when "
+                      f"it is at the TV).")
+        if prior.kind == "beta":
+            ess = _bayes.prior_ess(prior)
+            if ess > n_planned:
+                issues.append(f"The prior carries an effective sample size of {ess:.0f}, MORE than the "
+                              f"{n_planned:,} patients this trial will enrol: the prior is doing more "
+                              "work than the evidence will. Justify it or weaken it.")
+        if abs(power - assur) > 0.05:
+            if assur < power:
+                issues.append(f"Assurance ({assur:.1%}) is below classical power ({power:.1%}) because power "
+                              "assumes the effect is exactly the TV, while assurance averages over the "
+                              "uncertainty about it. Assurance is the number to budget against.")
+            else:
+                issues.append(f"Assurance ({assur:.1%}) EXCEEDS classical power at the TV ({power:.1%}) "
+                              "because the informed prior is centred above the Target Value, so it expects "
+                              "a larger effect than the TV. This makes the assurance depend heavily on that "
+                              "optimistic prior; see the prior-sensitivity panel, and treat the classical "
+                              "power at the TV as the more conservative planning number.")
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001 — never raise into the app
+        return _err(str(e))
+
+
+def fit_interim(df: pd.DataFrame, outcome: str, n_planned=None, tv=None, lrv=None,
+                gate_tv: float = 0.80, gate_lrv: float = 0.90, stop_lrv: float = 0.10,
+                higher_is_better: bool = True,
+                prior_successes=None, prior_n=None, prior_a=None, prior_b=None,
+                lock=None, endpoint_type: str = "proportion",
+                framing: str = "single_arm") -> ModelResult:
+    """Interim Bayesian go/no-go: given the patients seen so far, will this trial end in GO?
+
+    The predictive probability of success is the futility signal that stops a trial early and saves
+    the money. Verified against the design lock, if one was supplied.
+    """
+    def _err(msg):
+        return ModelResult("interim", outcome or "go/no-go", 0, "posterior (95% credible interval)",
+                           error=msg)
+    try:
+        if n_planned is None or tv is None or lrv is None:
+            return _err("an interim analysis needs the planned sample size, a target value (TV), and a "
+                        "lower reference value (LRV).")
+        n_planned = int(n_planned)
+        tv, lrv = float(tv), float(lrv)
+        if endpoint_type != "proportion":
+            return _err("the interim analysis currently supports a binary endpoint only.")
+        if higher_is_better and lrv > tv:
+            return _err("the LRV must not exceed the TV.")
+        if not (0 <= tv <= 1 and 0 <= lrv <= 1):
+            return _err("the TV and LRV must be between 0 and 1 (express 30% as 0.30).")
+
+        d = _clean(df, [outcome])
+        if outcome not in d.columns or len(d) == 0:
+            return _err("no observed subjects to analyse.")
+        y = _to_binary(d[outcome])
+        n_obs, x_obs = int(len(y)), int(y.sum())
+        if n_obs > n_planned:
+            return _err(f"{n_obs:,} subjects observed exceeds the planned enrolment of {n_planned:,}. "
+                        "This is a final analysis, not an interim.")
+
+        rule = _bayes.DecisionRule(tv=tv, lrv=lrv, gate_tv=float(gate_tv), gate_lrv=float(gate_lrv),
+                                   stop_lrv=float(stop_lrv), higher_is_better=bool(higher_is_better))
+        prior = _build_prior("proportion", tv, lrv, prior_successes, prior_n, prior_a, prior_b,
+                             None, None)
+        pa, pb = prior.params
+        post_a, post_b = _bayes.beta_posterior(pa, pb, x_obs, n_obs)
+
+        p_tv = float(_bayes.prob_exceeds("beta", post_a, post_b, tv, higher_is_better))
+        p_lrv = float(_bayes.prob_exceeds("beta", post_a, post_b, lrv, higher_is_better))
+        call, reason = _bayes.decide(p_tv, p_lrv, rule)
+        ppos = _bayes.predictive_prob_success(prior, x_obs, n_obs, n_planned, rule)
+
+        params = {"endpoint_type": "proportion", "framing": framing, "n_planned": n_planned,
+                  "tv": tv, "lrv": lrv, "gate_tv": gate_tv, "gate_lrv": gate_lrv,
+                  "stop_lrv": stop_lrv, "higher_is_better": higher_is_better,
+                  "prior_a": pa, "prior_b": pb, "prior_mu": None, "prior_sd": None}
+        ps = _prespec.verify(lock, params)
+
+        mean = post_a / (post_a + post_b)
+        lo, hi = stats.beta.ppf([0.025, 0.975], post_a, post_b)
+        mr = ModelResult("interim", outcome, n_obs, "posterior rate (95% credible interval)",
+                         [Term("response rate", float(mean), float(lo), float(hi), float("nan"))],
+                         fit_stat=f"{x_obs}/{n_obs} observed · {n_planned - n_obs} still to enrol · "
+                                  f"PPoS={ppos:.1%}",
+                         note="Interim Bayesian go/no-go. The predictive probability of success is the "
+                              "chance the trial ends in GO if it runs to full enrolment. Synthetic data.")
+        # A futile trial is a STOP regardless of where the posterior sits today.
+        if ppos < rule.stop_lrv:
+            call = "STOP"
+            reason = (f"Predictive probability of success is only {ppos:.1%}: even running to full "
+                      f"enrolment ({n_planned:,}), this trial is very unlikely to clear its "
+                      "pre-specified gates. Stop for futility.")
+        mr.verdict = {"call": call, "reason": reason, "predictive_prob": round(ppos, 4),
+                      "posterior_mean": round(float(mean), 4)}
+        mr.series = [{"n": int(k),
+                      "predictive_prob": round(_bayes.predictive_prob_success(
+                          prior, int(round(mean * k)), int(k), n_planned, rule), 4)}
+                     for k in np.unique(np.linspace(max(1, n_obs // 4), n_planned, 12).astype(int))]
+        mr.prespec = {"status": ps["status"], "lock": lock, "drift": ps["drift"]}
+        mr.robustness = {"framing": framing}
+
+        issues = [_prespec.caveat(ps), f"Prior: {prior.provenance}"]
+        if n_obs == n_planned:
+            issues.append("Enrolment is complete, so this is the FINAL decision, not a prediction: the "
+                          "predictive probability degenerates to the final GO/no-GO.")
+        if (pa + pb) < 1.0 and x_obs in (0, n_obs):
+            issues.append("UNRELIABLE / degenerate prior: a near-noninformative Beta prior becomes "
+                          "unexpectedly INFORMATIVE when every subject so far is a success (or every one "
+                          "a failure), which is exactly the case here. FDA's 2026 draft guidance warns "
+                          "about this. Use a proper weakly-informative prior, e.g. Beta(1,1), and re-run.")
+        if _bayes.prior_ess(prior) > n_obs:
+            issues.append(f"The prior carries an effective sample size of {_bayes.prior_ess(prior):.0f}, "
+                          f"more than the {n_obs:,} subjects observed so far: the prior is currently "
+                          "doing more work than the data.")
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001 — never raise into the app
+        return _err(str(e))

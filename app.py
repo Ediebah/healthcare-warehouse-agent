@@ -29,6 +29,7 @@ except Exception:
 
 from agent.agent import run_analysis
 from agent.charts import (
+    assurance_curve_chart,
     build_chart,
     experiment_chart,
     forecast_chart,
@@ -36,6 +37,7 @@ from agent.charts import (
     importance_chart,
     kpi_cards,
     ni_plot,
+    oc_curve_chart,
     power_curve_chart,
     radar_chart,
     survival_plot,
@@ -866,6 +868,28 @@ def _render_model(m: dict) -> str:
         if m.get("note"):
             lines.append(f"\n_{m['note']}_")
         return "\n".join(lines)
+    if m.get("model_type") in ("assurance", "interim"):
+        v = m.get("verdict", {})
+        lines = [head, ""]
+        if m.get("model_type") == "assurance":
+            lines.append(f"- **assurance (probability of success)**: {v.get('assurance', 0):.1%}")
+            lines.append(f"- **power at the TV**: {v.get('power', 0):.1%}")
+        else:
+            lines.append(f"- **predictive probability of success**: {v.get('predictive_prob', 0):.1%}")
+            lines.append(f"- **posterior response rate**: {v.get('posterior_mean', 0):.1%}")
+        panel = (m.get("robustness") or {}).get("panel")
+        if panel:
+            lines += ["", "**Prior sensitivity**", "",
+                      "| prior | parameters | assurance | verdict |", "|---|---|---|---|"]
+            for row in panel:
+                lines.append(f"| {row['prior']} | {row['params']} | {row['assurance']:.1%} "
+                             f"| **{row['call']}** |")
+        if m.get("issues"):
+            lines.append("")
+            lines += [f"- ⚠️ {iss}" for iss in m["issues"]]
+        if m.get("note"):
+            lines.append(f"\n_{m['note']}_")
+        return "\n".join(lines)
     if m.get("model_type") in ("experiment", "noninferiority") and m.get("arms"):   # arms + issues
         binm = all(0 <= a["value"] <= 1 for a in m["arms"])
         metric = "conversion" if binm else "mean"
@@ -974,12 +998,21 @@ if result is not None:
             _render_lineage(result.lineage)
         eyebrow("Statistical model")
         _mt = result.model.get("model_type")
-        if _mt in ("experiment", "noninferiority", "sample_size"):   # decision/design → verdict badge
+        _ps = result.model.get("prespec") or {}
+        if _ps.get("status"):
+            _pc = {"PRE-SPECIFIED": "#4fd1c5", "DRIFTED": "#f5c451",
+                   "INVALID": "#f87171"}.get(_ps["status"], "#8ea0b0")
+            st.markdown(
+                f"<div style='display:inline-block;border:1px solid {_pc};color:{_pc};"
+                f"padding:.15rem .6rem;border-radius:6px;font-size:.75rem;letter-spacing:.08em;"
+                f"margin-bottom:.4rem'>{html.escape(_ps['status'])}</div>", unsafe_allow_html=True)
+        if _mt in ("experiment", "noninferiority", "sample_size", "assurance", "interim"):
             _v = result.model.get("verdict", {})
             _call = _v.get("call", "")
             _color = ("#4fd1c5" if _mt == "sample_size" else
-                      {"SHIP": "#4fd1c5", "NON-INFERIOR": "#4fd1c5", "DO NOT SHIP": "#f87171",
-                       "NOT NON-INFERIOR": "#f87171", "INCONCLUSIVE": "#f5c451"}.get(_call, "#8ea0b0"))
+                      {"SHIP": "#4fd1c5", "NON-INFERIOR": "#4fd1c5", "GO": "#4fd1c5",
+                       "DO NOT SHIP": "#f87171", "NOT NON-INFERIOR": "#f87171", "STOP": "#f87171",
+                       "INCONCLUSIVE": "#f5c451", "CONSIDER": "#f5c451"}.get(_call, "#8ea0b0"))
             st.markdown(
                 f"<div style='display:inline-block;border:2px solid {_color};color:{_color};"
                 f"padding:.45rem 1.1rem;border-radius:9px;font-weight:700;font-size:1.15rem;"
@@ -988,9 +1021,14 @@ if result is not None:
                 f"{html.escape(_v.get('reason', ''))}</div>", unsafe_allow_html=True)
             _dc = (experiment_chart(result.model) if _mt == "experiment"
                    else ni_plot(result.model) if _mt == "noninferiority"
+                   else assurance_curve_chart(result.model) if _mt in ("assurance", "interim")
                    else power_curve_chart(result.model))
             if _dc is not None:
                 st.altair_chart(_dc, width="stretch")
+            if _mt == "assurance":
+                _oc = oc_curve_chart(result.model)
+                if _oc is not None:
+                    st.altair_chart(_oc, width="stretch")
         if result.model.get("km"):                       # survival → Kaplan-Meier curves
             st.altair_chart(survival_plot(result.model["km"]), width="stretch")
         if _mt == "timeseries" and result.model.get("series"):   # time-series → history + forecast
@@ -1004,6 +1042,16 @@ if result is not None:
         if _fp is not None:
             st.altair_chart(_fp, width="stretch")
         st.markdown(_render_model(result.model))
+        _lock = (result.model.get("prespec") or {}).get("lock")
+        if _lock and result.model.get("model_type") == "assurance":
+            st.download_button(
+                "⬇ Download pre-specification lock",
+                data=json.dumps(_lock, indent=2),
+                file_name=f"prespec-lock-{_lock['lock_id'][:12]}.json",
+                mime="application/json",
+                help="Lock this design before the trial runs. Supply it at the interim analysis and "
+                     "the app will verify that nothing moved. A hash proves integrity, not that the "
+                     "lock predates the data — anchor it to a protocol or registry entry for that.")
         eyebrow("Interpretation & recommendation")
         st.markdown(result.interpretation)
         _report_button(result, "model")

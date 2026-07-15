@@ -196,3 +196,44 @@ def test_report_docx_smoke():
                           interpretation="**Findings**\nText.", hypothesis="H")
     b = report.build_docx(res)
     assert b[:2] == b"PK" and len(b) > 20_000               # a real .docx with an embedded figure
+
+def test_report_renders_a_bayesian_go_no_go(tmp_path):
+    """The .docx must carry the verdict, the prior sensitivity, and the pre-specification status."""
+    import io
+    import zipfile
+    from types import SimpleNamespace
+
+    from agent import modeling, report
+
+    mr = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    assert mr.error is None
+    res = SimpleNamespace(question="Will Phase II succeed?", model=mr.as_dict(),
+                          sql="", interpretation="**Findings**\nok", findings=[], citations=[],
+                          verification={}, hypothesis="", dataframe=None, trace={}, lineage=None,
+                          error=None, clarification=None, attempts=[])
+    blob = report.build_docx(res)
+    assert blob[:2] == b"PK" and len(blob) > 5000       # a real .docx zip
+    xml = zipfile.ZipFile(io.BytesIO(blob)).read("word/document.xml").decode()
+    assert "PRE-SPECIFIED" in xml                       # the lock status, on the approval page
+    assert "Prior sensitivity" in xml                   # the four-prior panel
+    assert "Type I error (GO rate at the LRV)" in xml   # the operating characteristics
+
+
+def test_report_renders_an_interim_run_without_a_lock():
+    """A live-app regression: an interim run with NO design lock stores prespec.lock=None, which
+    crashed build_docx (`'NoneType' object has no attribute 'get'`) on the approval page."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from agent import modeling, report
+
+    df = pd.DataFrame({"responded": [1] * 12 + [0] * 28})
+    mr = modeling.fit_interim(df, "responded", n_planned=100, tv=0.30, lrv=0.15)
+    assert mr.error is None and mr.prespec["status"] == "EXPLORATORY" and mr.prespec["lock"] is None
+    res = SimpleNamespace(question="Stop for futility?", model=mr.as_dict(),
+                          sql="", interpretation="**Findings**\nok", findings=[], citations=[],
+                          verification={}, hypothesis="", dataframe=None, trace={}, lineage=None,
+                          error=None, clarification=None, attempts=[])
+    blob = report.build_docx(res)
+    assert blob[:2] == b"PK" and len(blob) > 5000

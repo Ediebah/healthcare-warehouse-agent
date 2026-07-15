@@ -49,3 +49,20 @@ def test_add_ci_computes_bounds():
     assert charts._add_ci(d, "prevalence_pct") is True
     assert "_ci_lo" in d and "_ci_hi" in d
     assert (d["_ci_lo"] <= d["prevalence_pct"]).all() and (d["prevalence_pct"] <= d["_ci_hi"]).all()
+
+
+def test_assurance_curve_chart_builds():
+    model = {"model_type": "assurance", "error": None,
+             "series": [{"n": 20, "assurance": 0.31}, {"n": 100, "assurance": 0.62}],
+             "verdict": {"call": "GO"}}
+    assert charts.assurance_curve_chart(model) is not None
+
+
+def test_assurance_curve_chart_is_none_without_series():
+    assert charts.assurance_curve_chart({"model_type": "assurance", "series": []}) is None
+
+
+def test_oc_curve_chart_builds():
+    model = {"model_type": "assurance", "error": None,
+             "robustness": {"oc": [{"theta": 0.1, "go_rate": 0.02}, {"theta": 0.4, "go_rate": 0.9}]}}
+    assert charts.oc_curve_chart(model) is not None

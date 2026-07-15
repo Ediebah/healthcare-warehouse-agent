@@ -312,3 +312,180 @@ def test_uplift_string_treatment_control_recognition():
     assert r.error is None
     assert r.terms[0].estimate > 0                          # drug raises y; sign must not flip
     assert any("drug" in i and "placebo" in i for i in r.issues)   # mapping stated to the user
+
+
+# ── Bayesian go/no-go: design stage ───────────────────────────────────────────────────────────────
+def test_assurance_verdict_flips_from_go_to_stop_as_the_bar_rises():
+    # a strongly positive Phase I (16/20) against a modest bar -> GO
+    go = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15,
+                                 prior_successes=16, prior_n=20)
+    assert go.error is None and go.verdict["call"] == "GO"
+    # the same evidence against a bar nobody could clear -> STOP
+    stop = modeling.calc_assurance(n_planned=100, tv=0.99, lrv=0.98,
+                                   prior_successes=16, prior_n=20)
+    assert stop.verdict["call"] == "STOP"
+
+
+def test_assurance_reports_the_prior_and_its_provenance():
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    assert r.error is None
+    joined = " ".join(r.issues)
+    assert "Beta(9" in joined and "8" in joined and "20" in joined     # Beta(1,1) + 8/20 -> Beta(9,13)
+
+
+def test_assurance_flags_a_fragile_verdict_when_the_skeptical_prior_flips_it():
+    # engineered so the informed prior says GO but a skeptic is not yet convinced -> must be fragile
+    r = modeling.calc_assurance(n_planned=40, tv=0.30, lrv=0.15, prior_successes=14, prior_n=20)
+    joined = " ".join(r.issues).lower()
+    assert r.robustness["fragile"] is True
+    assert "fragile" in joined and "verdict holds across" not in joined
+    assert any(row["prior"] == "Skeptical" for row in r.robustness["panel"])
+
+
+def test_assurance_emits_operating_characteristics():
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    assert 0.0 <= r.robustness["type_i_error"] <= 1.0
+    assert 0.0 <= r.robustness["power"] <= 1.0
+    joined = " ".join(r.issues).lower()
+    assert "type i error" in joined
+
+
+def test_assurance_flags_a_prior_stronger_than_the_planned_data():
+    # a 200-observation prior against a 20-patient trial: the prior is doing the work
+    r = modeling.calc_assurance(n_planned=20, tv=0.30, lrv=0.15, prior_successes=70, prior_n=200)
+    assert any("prior" in i.lower() and "more" in i.lower() for i in r.issues)
+
+
+def test_assurance_attaches_a_valid_lock():
+    from agent import prespec
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    lock = r.prespec["lock"]
+    assert prespec.verify(lock, lock["params"])["status"] == "PRE-SPECIFIED"
+
+
+def test_assurance_device_performance_goal_collapses_to_go_no_go():
+    # tv == lrv == the performance goal (0.85): Beta(89,13) puts P(above 0.85) at 76.5%, short of
+    # both the 80% TV gate and the 90% LRV gate -> CONSIDER, not a clean GO/STOP
+    r = modeling.calc_assurance(n_planned=150, tv=0.85, lrv=0.85, prior_successes=88, prior_n=100)
+    assert r.error is None and r.verdict["call"] == "CONSIDER"
+    assert r.robustness["framing"] == "single_arm"
+
+
+def test_assurance_caveat_says_exceeds_when_assurance_is_above_power():
+    # a strong informed prior centred ABOVE the TV: assurance should EXCEED classical power at the TV,
+    # and the caveat must say so -- not claim the higher number is "below" the lower one
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=16, prior_n=20)
+    assur, power = r.verdict["assurance"], r.robustness["power"]
+    assert assur > power and (assur - power) > 0.05
+    caveats = [i for i in r.issues if "classical power" in i]
+    assert caveats, "expected an assurance-vs-power caveat for this large a gap"
+    caveat = caveats[0]
+    assert "below" not in caveat.lower()
+    assert "exceeds" in caveat.lower()
+
+
+def test_assurance_caveat_says_below_when_assurance_is_below_power():
+    # a weak, pessimistic informed prior (mass well below the TV): assurance should fall BELOW
+    # classical power at the TV, and the caveat must correctly say "below"
+    r = modeling.calc_assurance(n_planned=200, tv=0.30, lrv=0.15, prior_successes=1, prior_n=15)
+    assur, power = r.verdict["assurance"], r.robustness["power"]
+    assert assur < power and (power - assur) > 0.05
+    caveats = [i for i in r.issues if "classical power" in i]
+    assert caveats, "expected an assurance-vs-power caveat for this large a gap"
+    caveat = caveats[0]
+    assert "is below classical power" in caveat
+    assert "exceeds" not in caveat.lower()
+
+
+def test_assurance_rejects_an_lrv_above_the_tv():
+    r = modeling.calc_assurance(n_planned=100, tv=0.15, lrv=0.30, prior_successes=8, prior_n=20)
+    assert r.error is not None and "lrv" in r.error.lower()
+
+
+def test_assurance_rejects_out_of_range_proportions():
+    r = modeling.calc_assurance(n_planned=100, tv=1.4, lrv=0.15, prior_successes=8, prior_n=20)
+    assert r.error is not None
+
+
+# ── Bayesian go/no-go: interim ────────────────────────────────────────────────────────────────────
+def _interim_df(successes: int, n: int) -> pd.DataFrame:
+    return pd.DataFrame({"responded": [1] * successes + [0] * (n - successes)})
+
+
+def test_interim_stops_for_futility_when_the_data_are_far_below_the_lrv():
+    r = modeling.fit_interim(_interim_df(1, 60), "responded", n_planned=70, tv=0.30, lrv=0.15)
+    assert r.error is None and r.verdict["call"] == "STOP"
+    assert r.verdict["predictive_prob"] < 0.05
+
+
+def test_interim_goes_when_the_data_are_strong():
+    r = modeling.fit_interim(_interim_df(30, 50), "responded", n_planned=60, tv=0.30, lrv=0.15)
+    assert r.error is None and r.verdict["call"] == "GO"
+
+
+def test_interim_reports_the_posterior_with_a_credible_interval():
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15)
+    t = r.terms[0]
+    assert 0.0 < t.ci_low < t.estimate < t.ci_high < 1.0
+    assert "credible" in r.effect_label.lower() or "posterior" in r.effect_label.lower()
+
+
+def test_interim_without_a_lock_is_stamped_exploratory():
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15)
+    assert r.prespec["status"] == "EXPLORATORY"
+    assert any("not pre-specified" in i.lower() for i in r.issues)
+
+
+def test_interim_with_a_matching_lock_is_pre_specified():
+    design = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    lock = design.prespec["lock"]
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15,
+                             prior_successes=8, prior_n=20, lock=lock)
+    assert r.prespec["status"] == "PRE-SPECIFIED"
+
+
+def test_interim_catches_drift_from_the_locked_design():
+    """Lock the design at LRV=0.15, then run the interim at LRV=0.10. That is moving the goalposts."""
+    design = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    lock = design.prespec["lock"]
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.10,
+                             prior_successes=8, prior_n=20, lock=lock)
+    assert r.prespec["status"] == "DRIFTED"
+    assert any(d["field"] == "lrv" for d in r.prespec["drift"])
+    assert any("drifted" in i.lower() and "lrv" in i.lower() for i in r.issues)
+
+
+def test_interim_guards_the_beta_epsilon_degeneracy():
+    """FDA's Jan-2026 draft guidance warns that a near-noninformative Beta(eps,eps) prior becomes
+    unexpectedly INFORMATIVE at 0% or 100% response. A real trap at an early interim look."""
+    r = modeling.fit_interim(_interim_df(20, 20), "responded", n_planned=100, tv=0.30, lrv=0.15,
+                             prior_a=0.001, prior_b=0.001)
+    assert any("unreliable" in i.lower() or "degenerate" in i.lower() for i in r.issues)
+
+
+def test_interim_rejects_more_observed_than_planned():
+    r = modeling.fit_interim(_interim_df(30, 60), "responded", n_planned=50, tv=0.30, lrv=0.15)
+    assert r.error is not None and "planned" in r.error.lower()
+
+
+def test_interim_at_full_enrollment_reports_the_final_decision():
+    r = modeling.fit_interim(_interim_df(30, 50), "responded", n_planned=50, tv=0.30, lrv=0.15)
+    assert r.error is None
+    assert any("complete" in i.lower() or "final" in i.lower() for i in r.issues)
+
+
+def test_render_carries_the_go_no_go_verdict_and_survives_bayes_robustness():
+    """render() feeds _interpret_model: it must carry the verdict for the LLM to lead with, and it
+    must not KeyError on the go/no-go robustness dict, which has no 'summary' (the spec-curve shape)."""
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    assert r.error is None
+    text = modeling.render(r)
+    assert "GO" in text
+    assert "PRIOR SENSITIVITY" in text
+
+
+def test_render_carries_the_interim_verdict():
+    df = pd.DataFrame({"responded": [1] * 12 + [0] * 28})
+    r = modeling.fit_interim(df, "responded", n_planned=100, tv=0.30, lrv=0.15)
+    assert r.error is None
+    assert "VERDICT" in modeling.render(r)
