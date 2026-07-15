@@ -227,35 +227,74 @@ NORMAL_PRIOR = bayes.Prior("informed", "normal", (1.5, 1.0), "informed prior, me
 NORMAL_SD = 5.0
 
 
-@pytest.mark.parametrize("n", [100, 2000])
+@pytest.mark.parametrize("n", [100, 2000, 5000])
 def test_assurance_normal_matches_monte_carlo(n):
     """Cross-check against an independent MC simulation (allowed in tests; the shipped module has
-    none). n=2000 is the case that exposes the old grid-search bias in _go_threshold_normal: its
-    resolution is fixed in raw observation-SD units and is never rescaled by the shrinking
-    standard error, so the reported assurance drifts systematically low as n grows."""
+    none). n=2000 and n=5000 are the cases that expose the old grid-search bias in
+    _go_threshold_normal: its resolution is fixed in raw observation-SD units and is never
+    rescaled by the shrinking standard error, so the reported assurance drifts systematically low
+    as n grows. n=100 is deliberately kept as the "too small to see it" negative control."""
     code = bayes.assurance(NORMAL_PRIOR, n, NORMAL_RULE, sd=NORMAL_SD)
     mc = _mc_normal_assurance(NORMAL_PRIOR, n, NORMAL_RULE, NORMAL_SD)
     assert code == pytest.approx(mc, abs=0.005)
 
 
 def test_assurance_normal_collapses_to_classical_power_under_a_point_prior():
-    """Continuous-endpoint analogue of test_assurance_collapses_to_power_under_a_point_prior:
-    as the prior tightens onto a point mass at mu0, assurance -> the GO rate assuming the true
-    effect IS mu0 (operating_characteristics evaluated at that single point), mirroring the exact
-    invariant that guards the binary path."""
+    """Continuous-endpoint analogue of test_assurance_collapses_to_power_under_a_point_prior.
+
+    The old version of this test compared assurance() against operating_characteristics(...,
+    grid=[mu0]) -- but both call the SAME internal _go_threshold_normal, so a bias in that helper
+    cancels out and the comparison proves nothing about correctness, only self-consistency.
+
+    This version never calls operating_characteristics or _go_threshold_normal at all. It checks
+    assurance() under a near-point-mass prior against TWO independent Monte Carlo simulations that
+    decide GO per draw straight from normal_posterior's formula + prob_exceeds (the module's
+    tested, threshold-finder-free primitives):
+      1. the general assurance MC (true effect ~ the near-degenerate prior);
+      2. the CLASSICAL known-SD power at mu0 -- true effect held FIXED at mu0, only sampling noise
+         xbar ~ Normal(mu0, sd/sqrt(n)) varies. Because the prior is near-point-mass the two should
+         (and do) agree closely with each other and with assurance().
+    sd0 is much tighter than a realistic informed prior (sd0=1.0 elsewhere in this file) but not
+    so tight that the GO decision saturates at exactly 0 or 1 everywhere in the search bracket --
+    mu0 is chosen to sit in the transition band, where a real crossing has to be resolved, so a
+    biased threshold search actually shows up as a wrong probability.
+    """
     rule = bayes.DecisionRule(tv=1.0, lrv=0.3, gate_tv=0.80, gate_lrv=0.90, stop_lrv=0.10, higher_is_better=True)
-    n, sd, mu0 = 500, 5.0, 1.5
-    tight = bayes.Prior("point", "normal", (mu0, 0.01), "point mass")
+    n, sd, mu0, sd0 = 2000, 5.0, 1.04, 0.05
+    tight = bayes.Prior("point", "normal", (mu0, sd0), "near-point mass")
     a = bayes.assurance(tight, n, rule, sd=sd)
-    oc = bayes.operating_characteristics(tight, n, rule, sd=sd, grid=np.array([mu0]))
-    assert a == pytest.approx(oc[0]["go_rate"], abs=1e-6)
+
+    # Ground truth 1: general assurance MC (same independent method used by the parametrized test
+    # above), true effect drawn from the (near-degenerate) prior itself.
+    draws = 400_000
+    mc_full = _mc_normal_assurance(tight, n, rule, sd, seed=104, draws=draws)
+    se_full = np.sqrt(mc_full * (1 - mc_full) / draws)
+    assert a == pytest.approx(mc_full, abs=max(6 * se_full, 0.005))
+
+    # Ground truth 2: classical known-SD power -- true effect FIXED at mu0 (no averaging over the
+    # prior), sampling noise only.
+    rng = np.random.default_rng(105)
+    se = sd / np.sqrt(n)
+    xbar = rng.normal(mu0, se, size=draws)
+    prec0, prec_d = 1.0 / sd0 ** 2, n / sd ** 2
+    var = 1.0 / (prec0 + prec_d)
+    post_mean = var * (prec0 * mu0 + prec_d * xbar)
+    post_sd = np.full_like(xbar, np.sqrt(var))
+    p_tv = bayes.prob_exceeds("normal", post_mean, post_sd, rule.tv, rule.higher_is_better)
+    p_lrv = bayes.prob_exceeds("normal", post_mean, post_sd, rule.lrv, rule.higher_is_better)
+    classical_power = float(np.mean((p_tv >= rule.gate_tv) & (p_lrv >= rule.gate_lrv)))
+    se_classical = np.sqrt(classical_power * (1 - classical_power) / draws)
+    assert a == pytest.approx(classical_power, abs=max(6 * se_classical, 0.01))
 
 
 def test_assurance_normal_lower_is_better_direction():
-    """A treatment that genuinely LOWERS the outcome (higher_is_better=False) should register high
-    assurance when its effect comfortably clears the thresholds on the low side. This direction of
-    the continuous branch had zero test coverage before this fix."""
+    """A treatment that genuinely LOWERS the outcome (higher_is_better=False) should register
+    assurance that matches an INDEPENDENT Monte Carlo cross-check, not just clear some loose floor.
+    The old bound (assurance > 0.7) was far too loose to catch a percentage-point-scale bias; this
+    direction of the continuous branch had zero precision-level coverage before this fix."""
     rule = bayes.DecisionRule(tv=-1.0, lrv=-0.3, gate_tv=0.80, gate_lrv=0.90, stop_lrv=0.10, higher_is_better=False)
     prior = bayes.Prior("informed", "normal", (-1.5, 0.5), "treatment lowers the outcome")
-    a = bayes.assurance(prior, 200, rule, sd=3.0)
-    assert a > 0.7
+    n, sd = 500, 3.0
+    a = bayes.assurance(prior, n, rule, sd=sd)
+    mc = _mc_normal_assurance(prior, n, rule, sd, seed=200, draws=300_000)
+    assert a == pytest.approx(mc, abs=0.005)
