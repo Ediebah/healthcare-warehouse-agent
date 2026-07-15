@@ -263,7 +263,7 @@ def build_docx(result, *, when: _dt.datetime | None = None) -> bytes:
             doc.add_paragraph("Departures from the locked design: "
                               + "; ".join(f"{d['field']}: locked {d['locked']} -> used {d['actual']}"
                                           for d in _ps["drift"]))
-        if _ps.get("lock", {}).get("lock_id"):
+        if (_ps.get("lock") or {}).get("lock_id"):     # interim without a lock stores lock=None
             _kv(doc, "Design lock", _ps["lock"]["lock_id"][:16])
 
     doc.add_heading("Approval / review", 2)
