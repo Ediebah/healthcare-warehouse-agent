@@ -287,7 +287,9 @@ _MODEL_HINT = re.compile(
     r"regression|proportion of variance|forecast|projection|trend|over time|seasonal|"
     r"causal|treatment effect|uplift|a/b|ab test|experiment|variant|conversion|"
     r"should we ship|ship it|ship the|roll ?out|non.?inferior|noninferior|margin|"
-    r"sample size|power to detect|how many (patient|subject|participant|per arm)|enroll|powered)", re.I)
+    r"sample size|power to detect|how many (patient|subject|participant|per arm)|enroll|powered|"
+    r"go.?(or.?)?no.?go|assurance|(probability|chance|likelihood)[^.?!]{0,60}succe|futility|stop early|"
+    r"interim|predictive probability|posterior|bayesian|performance goal|de.?risk)", re.I)
 
 
 def _route(question: str, context: str) -> dict:
@@ -335,6 +337,20 @@ def _route(question: str, context: str) -> dict:
         "`effect`) [+ `margin` for NI]; for a mean `mean_control`,`mean_treatment` (or `effect`),`sd` "
         "[+ `margin`]. Optional `alpha` (default 0.05), `power` (default 0.8), `ratio` (default 1), "
         "`higher_is_better`. Express rates as proportions (80% → 0.8).\n"
+        "  'assurance'   a DESIGN-STAGE Bayesian go/no-go — 'what is the probability a 100-patient "
+        "Phase II succeeds', 'what is the assurance', 'should we invest in the next study'. NO data, "
+        "NO analytic_sql. Extract: `n_planned` (the planned enrolment), `tv` (Target Value: the effect "
+        "hoped for), `lrv` (Lower Reference Value: the minimum worth pursuing), and the prior from any "
+        "previous study as `prior_successes` + `prior_n` (e.g. 'Phase I showed 8/20' -> 8 and 20). For "
+        "a DEVICE performance goal (a single-arm objective performance criterion, e.g. 'success rate "
+        "above 85%') set tv AND lrv BOTH to the goal (0.85) and `framing`='single_arm'. Express rates "
+        "as proportions (30% -> 0.30). Optional: `higher_is_better` (false for an adverse-event rate).\n"
+        "  'interim'     an INTERIM Bayesian go/no-go on data collected SO FAR — 'we are 40 patients "
+        "in with 12 responses, continue or stop', 'stop for futility?', 'predictive probability of "
+        "success'. analytic_sql returns ONE ROW PER SUBJECT OBSERVED SO FAR with a binary `outcome` "
+        "column (cast to int). Also extract `n_planned` (the FULL planned enrolment, which is larger "
+        "than the rows returned), `tv`, `lrv`, and the prior as `prior_successes` + `prior_n` if a "
+        "previous study is mentioned.\n"
         "  'causal'      the EFFECT / IMPACT of a specific binary intervention or exposure (on a drug vs "
         "not, insured vs not, had-procedure vs not) on an outcome, adjusting for confounders → T-learner "
         "uplift. Needs `outcome`, a binary `treatment`, and `predictors` (the confounders). Binarize the "
@@ -354,6 +370,7 @@ def _route(question: str, context: str) -> dict:
         '"treatment":"col", "margin":0.1, "higher_is_better":true, '
         '"kind":"superiority", "outcome_type":"proportion", "p_control":0.7, "p_treatment":0.8, '
         '"effect":0.1, "mean_control":0, "mean_treatment":0, "sd":1, "alpha":0.05, "power":0.8, "ratio":1, '
+        '"n_planned":100, "tv":0.3, "lrv":0.15, "prior_successes":8, "prior_n":20, "framing":"single_arm", '
         '"analytic_sql":"SELECT ...", "hypothesis":"one sentence"}. '
         'Plain aggregation → {"mode":"aggregate"}.',
     )
@@ -385,6 +402,12 @@ def _fit_model(spec: dict, df) -> modeling.ModelResult:
     if mt == "noninferiority":
         return modeling.fit_noninferiority(df, spec["group"], spec["outcome"], spec.get("margin"),
                                            spec.get("higher_is_better", True), spec.get("control"))
+    if mt == "interim":
+        return modeling.fit_interim(
+            df, spec["outcome"], n_planned=spec.get("n_planned"), tv=spec.get("tv"),
+            lrv=spec.get("lrv"), higher_is_better=spec.get("higher_is_better", True),
+            prior_successes=spec.get("prior_successes"), prior_n=spec.get("prior_n"),
+            framing=spec.get("framing", "single_arm"))
     return modeling.ModelResult(mt or "?", spec.get("outcome", ""), 0, "", error=f"unknown model_type: {mt}")
 
 
@@ -411,6 +434,15 @@ def _interpret_model(question: str, mr: modeling.ModelResult) -> str:
         "- sample_size: LEAD with the required n per arm and total, then the assumptions (rates/effect, α, "
         "power, allocation); note it's a design-stage calculation on assumptions (not an analysis of "
         "data) and that you should inflate for expected dropout.\n"
+        "- assurance: LEAD with the GO / CONSIDER / STOP verdict and the assurance (probability of "
+        "success). State the TV and LRV it was judged against, the prior and where it came from, and "
+        "the type I error and power. If the verdict is FRAGILE across priors, LEAD the caveats with "
+        "that — a prior-driven call is not a data-driven one. Say plainly that this is a design-stage "
+        "decision-support calculation, not a regulatory submission analysis.\n"
+        "- interim: LEAD with the GO / CONSIDER / STOP verdict and the PREDICTIVE PROBABILITY OF "
+        "SUCCESS (the chance the trial ends in GO at full enrolment). A low predictive probability is a "
+        "futility signal: say so directly. State the posterior rate with its credible interval, and the "
+        "pre-specification status — a DRIFTED or EXPLORATORY run must NOT be described as confirmatory.\n"
         "If a ROBUSTNESS line is present, state whether the headline effect held across the alternative "
         "specifications; if it is fragile, lead the caveats with that.\n"
         "Use markdown headers:\n"
@@ -517,6 +549,25 @@ def _run_sample_size(question: str, spec: dict, result: AgentResult,
     return result
 
 
+_ASSURANCE_KEYS = ("endpoint_type", "framing", "n_planned", "tv", "lrv", "gate_tv", "gate_lrv",
+                   "stop_lrv", "higher_is_better", "prior_successes", "prior_n", "prior_a",
+                   "prior_b", "prior_mu", "prior_sd", "sd", "anchor")
+
+
+def _run_assurance(question: str, spec: dict, result: AgentResult,
+                   deadline_start: float | None = None) -> AgentResult:
+    """Design-stage Bayesian go/no-go — computed from the question, queries no data."""
+    result.hypothesis = spec.get("hypothesis", "")
+    params = {k: spec[k] for k in _ASSURANCE_KEYS if spec.get(k) is not None}
+    mr = modeling.calc_assurance(**params)
+    result.model = mr.as_dict()
+    if not mr.error:
+        _check_deadline(deadline_start)
+    result.interpretation = (f"**Findings**\nCould not compute the go/no-go: {mr.error}"
+                             if mr.error else _interpret_model(question, mr))
+    return result
+
+
 def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
                  catalog: dict | None = None, db_path=None) -> AgentResult:
     result = AgentResult(question=question)
@@ -583,6 +634,8 @@ def run_analysis(question: str, max_tries: int = MAX_SQL_TRIES,
             spec = _route(question, context)
             if spec.get("model_type") == "sample_size":       # design-stage calc — no data/SQL
                 return _run_sample_size(question, spec, result, start)
+            if spec.get("model_type") == "assurance":         # design-stage Bayesian go/no-go — no data
+                return _run_assurance(question, spec, result, start)
             if spec.get("analytic_sql") and spec.get("model_type") not in (None, "", "aggregate"):
                 res = _run_model(question, context, spec, result, retrieved["all_table_names"],
                                  db_path, start, vocab)

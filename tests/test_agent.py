@@ -46,3 +46,39 @@ def test_injection_guard_allows_analytical_phrasing():
     assert not agent._looks_like_injection("Ignore the previous quarter and show current costs")
     assert not agent._looks_like_injection("Don't forget the readmission denominator in the rate")
     assert not agent._looks_like_injection("ignore prior admissions when counting readmissions")
+
+
+def test_model_hint_matches_bayesian_go_no_go_questions():
+    """The router is GATED by _MODEL_HINT: a question that does not match never reaches _route,
+    so the whole feature would be unreachable without these keywords."""
+    for q in [
+        "What is the probability a 100-patient Phase II succeeds?",
+        "Should we go or no-go on this programme?",
+        "We are 40 patients in with 12 responses — stop for futility?",
+        "What is the assurance of a 60-patient trial?",
+        "What is the predictive probability of success at this interim?",
+    ]:
+        assert agent._MODEL_HINT.search(q), q
+
+
+def test_run_assurance_takes_the_no_data_path(monkeypatch):
+    """assurance is a DESIGN calculation: it must never touch SQL."""
+    def _boom(*a, **k):
+        raise AssertionError("assurance must not run SQL")
+    monkeypatch.setattr(agent, "run_query", _boom)
+    monkeypatch.setattr(agent, "_interpret_model", lambda *a, **k: "**Findings**\nok")
+
+    spec = {"model_type": "assurance", "n_planned": 100, "tv": 0.30, "lrv": 0.15,
+            "prior_successes": 8, "prior_n": 20, "hypothesis": "h"}
+    res = agent._run_assurance("Will Phase II succeed?", spec, agent.AgentResult(question="q"))
+    assert res.model["model_type"] == "assurance"
+    assert res.model["verdict"]["call"] in ("GO", "CONSIDER", "STOP")
+
+
+def test_fit_model_dispatches_interim():
+    import pandas as pd
+    df = pd.DataFrame({"responded": [1] * 12 + [0] * 28})
+    spec = {"model_type": "interim", "outcome": "responded", "n_planned": 100,
+            "tv": 0.30, "lrv": 0.15}
+    mr = agent._fit_model(spec, df)
+    assert mr.model_type == "interim" and mr.error is None
