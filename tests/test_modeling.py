@@ -334,10 +334,11 @@ def test_assurance_reports_the_prior_and_its_provenance():
 
 
 def test_assurance_flags_a_fragile_verdict_when_the_skeptical_prior_flips_it():
-    # engineered so the informed prior says GO but a skeptic is not yet convinced
+    # engineered so the informed prior says GO but a skeptic is not yet convinced -> must be fragile
     r = modeling.calc_assurance(n_planned=40, tv=0.30, lrv=0.15, prior_successes=14, prior_n=20)
     joined = " ".join(r.issues).lower()
-    assert "fragile" in joined or "holds" in joined            # the panel always reports one or the other
+    assert r.robustness["fragile"] is True
+    assert "fragile" in joined and "verdict holds across" not in joined
     assert any(row["prior"] == "Skeptical" for row in r.robustness["panel"])
 
 
@@ -363,10 +364,37 @@ def test_assurance_attaches_a_valid_lock():
 
 
 def test_assurance_device_performance_goal_collapses_to_go_no_go():
-    # tv == lrv == the performance goal: the CONSIDER band vanishes
+    # tv == lrv == the performance goal (0.85): Beta(89,13) puts P(above 0.85) at 76.5%, short of
+    # both the 80% TV gate and the 90% LRV gate -> CONSIDER, not a clean GO/STOP
     r = modeling.calc_assurance(n_planned=150, tv=0.85, lrv=0.85, prior_successes=88, prior_n=100)
-    assert r.error is None and r.verdict["call"] in ("GO", "STOP", "CONSIDER")
+    assert r.error is None and r.verdict["call"] == "CONSIDER"
     assert r.robustness["framing"] == "single_arm"
+
+
+def test_assurance_caveat_says_exceeds_when_assurance_is_above_power():
+    # a strong informed prior centred ABOVE the TV: assurance should EXCEED classical power at the TV,
+    # and the caveat must say so -- not claim the higher number is "below" the lower one
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=16, prior_n=20)
+    assur, power = r.verdict["assurance"], r.robustness["power"]
+    assert assur > power and (assur - power) > 0.05
+    caveats = [i for i in r.issues if "classical power" in i]
+    assert caveats, "expected an assurance-vs-power caveat for this large a gap"
+    caveat = caveats[0]
+    assert "below" not in caveat.lower()
+    assert "exceeds" in caveat.lower()
+
+
+def test_assurance_caveat_says_below_when_assurance_is_below_power():
+    # a weak, pessimistic informed prior (mass well below the TV): assurance should fall BELOW
+    # classical power at the TV, and the caveat must correctly say "below"
+    r = modeling.calc_assurance(n_planned=200, tv=0.30, lrv=0.15, prior_successes=1, prior_n=15)
+    assur, power = r.verdict["assurance"], r.robustness["power"]
+    assert assur < power and (power - assur) > 0.05
+    caveats = [i for i in r.issues if "classical power" in i]
+    assert caveats, "expected an assurance-vs-power caveat for this large a gap"
+    caveat = caveats[0]
+    assert "is below classical power" in caveat
+    assert "exceeds" not in caveat.lower()
 
 
 def test_assurance_rejects_an_lrv_above_the_tv():

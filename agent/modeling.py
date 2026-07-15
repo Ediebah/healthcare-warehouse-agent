@@ -1520,9 +1520,16 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
                               f"{n_planned:,} patients this trial will enrol: the prior is doing more "
                               "work than the evidence will. Justify it or weaken it.")
         if abs(power - assur) > 0.05:
-            issues.append(f"Assurance ({assur:.1%}) is below classical power ({power:.1%}) because power "
-                          "assumes the effect is exactly the TV, while assurance averages over the "
-                          "uncertainty about it. Assurance is the number to budget against.")
+            if assur < power:
+                issues.append(f"Assurance ({assur:.1%}) is below classical power ({power:.1%}) because power "
+                              "assumes the effect is exactly the TV, while assurance averages over the "
+                              "uncertainty about it. Assurance is the number to budget against.")
+            else:
+                issues.append(f"Assurance ({assur:.1%}) EXCEEDS classical power at the TV ({power:.1%}) "
+                              "because the informed prior is centred above the Target Value, so it expects "
+                              "a larger effect than the TV. This makes the assurance depend heavily on that "
+                              "optimistic prior; see the prior-sensitivity panel, and treat the classical "
+                              "power at the TV as the more conservative planning number.")
         mr.issues = issues
         return mr
     except Exception as e:  # noqa: BLE001 — never raise into the app
