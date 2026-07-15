@@ -405,3 +405,70 @@ def test_assurance_rejects_an_lrv_above_the_tv():
 def test_assurance_rejects_out_of_range_proportions():
     r = modeling.calc_assurance(n_planned=100, tv=1.4, lrv=0.15, prior_successes=8, prior_n=20)
     assert r.error is not None
+
+
+# ── Bayesian go/no-go: interim ────────────────────────────────────────────────────────────────────
+def _interim_df(successes: int, n: int) -> pd.DataFrame:
+    return pd.DataFrame({"responded": [1] * successes + [0] * (n - successes)})
+
+
+def test_interim_stops_for_futility_when_the_data_are_far_below_the_lrv():
+    r = modeling.fit_interim(_interim_df(1, 60), "responded", n_planned=70, tv=0.30, lrv=0.15)
+    assert r.error is None and r.verdict["call"] == "STOP"
+    assert r.verdict["predictive_prob"] < 0.05
+
+
+def test_interim_goes_when_the_data_are_strong():
+    r = modeling.fit_interim(_interim_df(30, 50), "responded", n_planned=60, tv=0.30, lrv=0.15)
+    assert r.error is None and r.verdict["call"] == "GO"
+
+
+def test_interim_reports_the_posterior_with_a_credible_interval():
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15)
+    t = r.terms[0]
+    assert 0.0 < t.ci_low < t.estimate < t.ci_high < 1.0
+    assert "credible" in r.effect_label.lower() or "posterior" in r.effect_label.lower()
+
+
+def test_interim_without_a_lock_is_stamped_exploratory():
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15)
+    assert r.prespec["status"] == "EXPLORATORY"
+    assert any("not pre-specified" in i.lower() for i in r.issues)
+
+
+def test_interim_with_a_matching_lock_is_pre_specified():
+    design = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    lock = design.prespec["lock"]
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.15,
+                             prior_successes=8, prior_n=20, lock=lock)
+    assert r.prespec["status"] == "PRE-SPECIFIED"
+
+
+def test_interim_catches_drift_from_the_locked_design():
+    """Lock the design at LRV=0.15, then run the interim at LRV=0.10. That is moving the goalposts."""
+    design = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    lock = design.prespec["lock"]
+    r = modeling.fit_interim(_interim_df(12, 40), "responded", n_planned=100, tv=0.30, lrv=0.10,
+                             prior_successes=8, prior_n=20, lock=lock)
+    assert r.prespec["status"] == "DRIFTED"
+    assert any(d["field"] == "lrv" for d in r.prespec["drift"])
+    assert any("drifted" in i.lower() and "lrv" in i.lower() for i in r.issues)
+
+
+def test_interim_guards_the_beta_epsilon_degeneracy():
+    """FDA's Jan-2026 draft guidance warns that a near-noninformative Beta(eps,eps) prior becomes
+    unexpectedly INFORMATIVE at 0% or 100% response. A real trap at an early interim look."""
+    r = modeling.fit_interim(_interim_df(20, 20), "responded", n_planned=100, tv=0.30, lrv=0.15,
+                             prior_a=0.001, prior_b=0.001)
+    assert any("unreliable" in i.lower() or "degenerate" in i.lower() for i in r.issues)
+
+
+def test_interim_rejects_more_observed_than_planned():
+    r = modeling.fit_interim(_interim_df(30, 60), "responded", n_planned=50, tv=0.30, lrv=0.15)
+    assert r.error is not None and "planned" in r.error.lower()
+
+
+def test_interim_at_full_enrollment_reports_the_final_decision():
+    r = modeling.fit_interim(_interim_df(30, 50), "responded", n_planned=50, tv=0.30, lrv=0.15)
+    assert r.error is None
+    assert any("complete" in i.lower() or "final" in i.lower() for i in r.issues)
