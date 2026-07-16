@@ -237,3 +237,30 @@ def test_report_renders_an_interim_run_without_a_lock():
                           error=None, clarification=None, attempts=[])
     blob = report.build_docx(res)
     assert blob[:2] == b"PK" and len(blob) > 5000
+
+
+def test_report_renders_a_two_arm_interim(tmp_path):
+    """The .docx must carry the per-arm rates and the risk difference for a two-arm interim run."""
+    import io
+    import zipfile
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from agent import modeling, report
+
+    rows = ([("treatment", 1)] * 20 + [("treatment", 0)] * 20
+            + [("control", 1)] * 10 + [("control", 0)] * 30)
+    df = pd.DataFrame(rows, columns=["arm", "responded"])
+    mr = modeling.fit_interim(df, "responded", n_planned=100, tv=0.15, lrv=0.0,
+                              framing="two_arm", group="arm", control="control")
+    assert mr.error is None and len(mr.arms) == 2
+    res = SimpleNamespace(question="Continue the trial?", model=mr.as_dict(),
+                          sql="", interpretation="**Findings**\nok", findings=[], citations=[],
+                          verification={}, hypothesis="", dataframe=None, trace={}, lineage=None,
+                          error=None, clarification=None, attempts=[])
+    blob = report.build_docx(res)
+    assert blob[:2] == b"PK" and len(blob) > 5000
+    xml = zipfile.ZipFile(io.BytesIO(blob)).read("word/document.xml").decode()
+    assert "treatment" in xml and "control" in xml           # the per-arm table
+    assert "Predictive probability of success" in xml

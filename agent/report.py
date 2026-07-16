@@ -43,10 +43,10 @@ _METHOD_BLURB = {
                  "the prior uncertainty about the true effect) with a dual-criterion decision rule "
                  "(Target Value / Lower Reference Value), a prior-sensitivity panel, and simulated "
                  "operating characteristics. Conjugate Beta-Binomial; computed in closed form.",
-    "interim": "Bayesian interim go/no-go. Posterior response rate with a 95% credible interval and "
-               "the exact predictive probability that the trial ends in a GO at full enrolment, "
-               "against a dual-criterion decision rule. Conjugate Beta-Binomial; computed in closed "
-               "form (no simulation).",
+    "interim": "Bayesian interim go/no-go. Single-arm: posterior response rate with a 95% credible "
+               "interval and the exact predictive probability the trial ends in a GO at full enrolment. "
+               "Two-arm: the same decision on the risk difference (treatment - control) via an exact "
+               "joint beta-binomial predictive. Conjugate Beta-Binomial; closed form (no simulation).",
 }
 
 
@@ -366,7 +366,20 @@ def build_docx(result, *, when: _dt.datetime | None = None) -> bytes:
             _kv(doc, "Power at the Target Value", f"{v.get('power', 0):.1%}")
         else:
             _kv(doc, "Predictive probability of success", f"{v.get('predictive_prob', 0):.1%}")
-            _kv(doc, "Posterior response rate", f"{v.get('posterior_mean', 0):.1%}")
+            if m.get("arms"):                              # two-arm: per-arm rates + the risk difference
+                _kv(doc, "Posterior risk difference (t - c)", f"{v.get('posterior_diff', 0):+.1%} "
+                    f"[{v.get('diff_ci_low', 0):+.1%}, {v.get('diff_ci_high', 0):+.1%}]")
+                table_caption("Per-arm posterior response rates with 95% credible intervals.")
+                pt = doc.add_table(rows=1, cols=4); pt.style = "Table Grid"
+                for j, h in enumerate(["Arm", "Rate", "95% CrI", "n"]):
+                    pt.rows[0].cells[j].text = h
+                for a in m["arms"]:
+                    c = pt.add_row().cells
+                    tag = " (control)" if a.get("is_baseline") else ""
+                    c[0].text = f"{a['arm']}{tag}"; c[1].text = f"{a['value']:.1%}"
+                    c[2].text = f"[{a['ci_low']:.1%}, {a['ci_high']:.1%}]"; c[3].text = f"{a['n']:,}"
+            else:
+                _kv(doc, "Posterior response rate", f"{v.get('posterior_mean', 0):.1%}")
         rb = m.get("robustness") or {}
         if rb.get("panel"):
             table_caption("Prior sensitivity: the verdict under each defensible prior. A verdict that "

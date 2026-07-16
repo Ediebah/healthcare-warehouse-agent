@@ -876,7 +876,16 @@ def _render_model(m: dict) -> str:
             lines.append(f"- **power at the TV**: {v.get('power', 0):.1%}")
         else:
             lines.append(f"- **predictive probability of success**: {v.get('predictive_prob', 0):.1%}")
-            lines.append(f"- **posterior response rate**: {v.get('posterior_mean', 0):.1%}")
+            if m.get("arms"):                              # two-arm: risk difference + per-arm table
+                lines.append(f"- **posterior risk difference (t − c)**: {v.get('posterior_diff', 0):+.1%} "
+                             f"[{v.get('diff_ci_low', 0):+.1%}, {v.get('diff_ci_high', 0):+.1%}]")
+                lines += ["", "| arm | posterior rate | 95% CrI | n |", "|---|---|---|---|"]
+                for a in m["arms"]:
+                    tag = " · control" if a.get("is_baseline") else ""
+                    lines.append(f"| `{a['arm']}`{tag} | {a['value']:.1%} "
+                                 f"| [{a['ci_low']:.1%}, {a['ci_high']:.1%}] | {a['n']:,} |")
+            else:
+                lines.append(f"- **posterior response rate**: {v.get('posterior_mean', 0):.1%}")
         panel = (m.get("robustness") or {}).get("panel")
         if panel:
             lines += ["", "**Prior sensitivity**", "",
