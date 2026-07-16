@@ -1388,7 +1388,7 @@ def render(r: ModelResult) -> str:
         if r.prespec.get("status"):
             lines.append(f"  PRE-SPECIFICATION: {r.prespec['status']}")
         for a in r.arms:                                   # two-arm interim: per-arm posteriors
-            tag = " (control)" if a.get("is_baseline") else ""
+            tag = " (control)" if a.get("is_baseline") and str(a["arm"]).lower() != "control" else ""
             lines.append(f"  {a['arm']:16} n={a['n']:,}  rate={a['value']:.1%}{tag}")
     for t in r.terms:
         ci = "" if np.isnan(t.ci_low) else f"  95% CI [{t.ci_low:.3f}, {t.ci_high:.3f}]"
@@ -1766,7 +1766,8 @@ def _fit_interim_two_arm(df, outcome, group, control, n_planned, tv, lrv,
         issues = [_prespec.caveat(ps), f"Prior: {prov}"]
         if (n_t + n_c) >= int(n_planned):
             issues.append("Enrolment is complete, so this is the FINAL decision, not a prediction.")
-        if (n_planned_t + 1) * (n_planned_c + 1) > _bayes.MAX_ENUM_DIFF:
+        m_t, m_c = n_planned_t - n_t, n_planned_c - n_c
+        if (m_t + 1) * (m_c + 1) > _bayes.MAX_ENUM_DIFF:
             issues.append("The predictive probability was grid-binned: the planned enrolment exceeds the "
                           "exact-enumeration cap, so the PPoS is a close deterministic approximation, "
                           "not the exact sum.")

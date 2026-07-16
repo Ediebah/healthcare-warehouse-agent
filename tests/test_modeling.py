@@ -557,3 +557,35 @@ def test_two_arm_interim_accepts_a_negative_lrv_non_inferiority_floor():
     r = modeling.fit_interim(_two_arm_df(28, 30, 8, 30), "responded", n_planned=80, tv=0.15, lrv=-0.05,
                              framing="two_arm", group="arm", control="control")
     assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+
+
+def test_two_arm_interim_no_false_grid_binned_caveat_at_common_size():
+    # n_planned=200 -> 100 planned/arm, but only ~40 observed/arm -> remaining grid 61x61=3721 < cap,
+    # so the PPoS is EXACT and the grid-binned caveat must NOT appear (regression: it keyed on planned n)
+    r = modeling.fit_interim(_two_arm_df(18, 40, 10, 40), "responded", n_planned=200, tv=0.15, lrv=0.0,
+                             framing="two_arm", group="arm", control="control")
+    assert r.error is None
+    assert not any("grid-binned" in i.lower() for i in r.issues)
+
+
+def test_two_arm_interim_grid_binned_caveat_fires_when_thinning(monkeypatch):
+    # force the cap low so the remaining grid exceeds it -> the caveat SHOULD appear
+    from agent import bayes
+    monkeypatch.setattr(bayes, "MAX_ENUM_DIFF", 100)
+    r = modeling.fit_interim(_two_arm_df(18, 40, 10, 40), "responded", n_planned=200, tv=0.15, lrv=0.0,
+                             framing="two_arm", group="arm", control="control")
+    assert r.error is None
+    assert any("grid-binned" in i.lower() for i in r.issues)
+
+
+def test_two_arm_interim_lower_is_better_adverse_event_rate():
+    # lower is better: treatment has FEWER events than control -> a benefit. theta is always
+    # (treatment - control); with higher_is_better=False the FAVORABLE direction is negative, so a
+    # hoped-for 15pp reduction is tv=-0.15 (a minimum floor of "no worse than control" is lrv=0.0).
+    # (tv=+0.15 is rejected by validation: with higher_is_better=False the TV must not exceed the LRV,
+    # matching the sign convention already exercised in tests/test_bayes.py's lower-is-better rule.)
+    r = modeling.fit_interim(_two_arm_df(6, 40, 18, 40), "responded", n_planned=100, tv=-0.15, lrv=0.0,
+                             higher_is_better=False, framing="two_arm", group="arm", control="control")
+    assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+    # treatment event rate (6/40=15%) is well below control (18/40=45%) -> favorable -> not a STOP
+    assert r.verdict["call"] in ("GO", "CONSIDER")

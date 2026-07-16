@@ -315,7 +315,7 @@ def _go_diff_block(t_ab, st, n_t: int, c_ab, sc, n_c: int, rule: DecisionRule) -
 
 
 def go_grid_diff(prior_t: Prior, prior_c: Prior, n_t: int, n_c: int, rule: DecisionRule) -> np.ndarray:
-    """go[st, sc] == 1 iff a trial that finishes with st/​n_t treatment and sc/​n_c control responders is a
+    """go[st, sc] == 1 iff a trial that finishes with st/n_t treatment and sc/n_c control responders is a
     GO. The two-arm analog of go_grid_binary; reused by the predictive probability and by the tests."""
     return _go_diff_block(prior_t.params, np.arange(n_t + 1), n_t,
                           prior_c.params, np.arange(n_c + 1), n_c, rule)
@@ -349,7 +349,7 @@ def predictive_prob_success_diff(prior_t: Prior, prior_c: Prior, x_t: int, n_t: 
         y_t, y_c = y_t[::step_t], y_c[::step_c]
     w_t = stats.betabinom.pmf(y_t, m_t, post_t[0], post_t[1])
     w_c = stats.betabinom.pmf(y_c, m_c, post_c[0], post_c[1])
-    w_t = w_t / w_t.sum()                                     # renormalize (exact when unthinned; bins when thinned)
+    w_t = w_t / w_t.sum()                # renormalize (exact when unthinned; a subsample, not binning, when thinned)
     w_c = w_c / w_c.sum()
     go = _go_diff_block(prior_t.params, x_t + y_t, n_planned_t,
                         prior_c.params, x_c + y_c, n_planned_c, rule)
