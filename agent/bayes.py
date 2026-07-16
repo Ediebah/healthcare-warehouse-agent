@@ -276,3 +276,81 @@ def predictive_prob_success(prior: Prior, x: int, n: int, n_planned: int, rule: 
     ys = np.arange(m + 1)
     w = stats.betabinom.pmf(ys, m, post_a, post_b)     # posterior-predictive of the remaining successes
     return float(np.sum(w * go_final[x + ys]))
+
+
+# ── two-arm predictive probability of success ─────────────────────────────────────────────────────
+MAX_ENUM_DIFF = 10_000    # cap on the (reachable) completion grid; above it, thin on a fixed stride
+
+# trapezoid weights on the fixed [0,1] quadrature grid, computed once
+_WV = np.full(_GRID, 1.0 / (_GRID - 1))
+_WV[0] = _WV[-1] = 0.5 / (_GRID - 1)
+_VGRID = np.linspace(0.0, 1.0, _GRID)
+
+
+def _go_diff_block(t_ab, st, n_t: int, c_ab, sc, n_c: int, rule: DecisionRule) -> np.ndarray:
+    """GO decision for every (final treatment count st, final control count sc). Vectorized: the
+    beta-difference tail P(rate_t - rate_c > threshold) is one trapezoid integral per (st, sc), but it
+    factorizes into (len_st, GRID) survival rows and (len_sc, GRID) density rows combined by a single
+    matrix multiply -- no per-cell Python loop, no 3-D intermediate.
+
+        P(t - c > d) = INT f_c(v) * sf_t(v + d) dv  ==  (sf_t * wv) @ f_c.T
+    """
+    at, bt = t_ab
+    ac, bc = c_ab
+    st = np.asarray(st, dtype=float)
+    sc = np.asarray(sc, dtype=float)
+    a_t, b_t = at + st, bt + (n_t - st)                       # final treatment posteriors  (len_st,)
+    a_c, b_c = ac + sc, bc + (n_c - sc)                       # final control posteriors    (len_sc,)
+    f_c = stats.beta.pdf(_VGRID[None, :], a_c[:, None], b_c[:, None])      # (len_sc, GRID)
+
+    def block_p(threshold):
+        thr = np.clip(_VGRID + threshold, 0.0, 1.0)
+        sf_t = stats.beta.sf(thr[None, :], a_t[:, None], b_t[:, None])     # (len_st, GRID)
+        p = (sf_t * _WV[None, :]) @ f_c.T                                  # (len_st, len_sc)
+        return p if rule.higher_is_better else 1.0 - p
+
+    p_tv = block_p(rule.tv)
+    p_lrv = block_p(rule.lrv)
+    return ((p_tv >= rule.gate_tv) & (p_lrv >= rule.gate_lrv)).astype(int)
+
+
+def go_grid_diff(prior_t: Prior, prior_c: Prior, n_t: int, n_c: int, rule: DecisionRule) -> np.ndarray:
+    """go[st, sc] == 1 iff a trial that finishes with st/​n_t treatment and sc/​n_c control responders is a
+    GO. The two-arm analog of go_grid_binary; reused by the predictive probability and by the tests."""
+    return _go_diff_block(prior_t.params, np.arange(n_t + 1), n_t,
+                          prior_c.params, np.arange(n_c + 1), n_c, rule)
+
+
+def predictive_prob_success_diff(prior_t: Prior, prior_c: Prior, x_t: int, n_t: int, x_c: int, n_c: int,
+                                 n_planned_t: int, n_planned_c: int, rule: DecisionRule) -> float:
+    """P(the randomized trial ENDS in GO | both arms' data so far). Exact for a binary endpoint.
+
+    Enumerate every joint completion (y_t future treatment responders, y_c future control responders),
+    weight by the PRODUCT of each arm's beta-binomial posterior-predictive, and check whether the FINAL
+    difference clears the pre-specified gates:
+
+        PPoS = SUM_{y_t, y_c} BetaBinom(y_t; m_t, ...) * BetaBinom(y_c; m_c, ...) * go[x_t+y_t, x_c+y_c]
+
+    No simulation error. Above MAX_ENUM_DIFF reachable cells the completion grid is thinned on a fixed
+    stride (deterministic, still no Monte Carlo)."""
+    if prior_t.kind != "beta" or prior_c.kind != "beta":
+        raise ValueError("the two-arm predictive probability supports a binary endpoint only")
+    if n_t > n_planned_t or n_c > n_planned_c:
+        raise ValueError("observed n exceeds the planned n in an arm")
+    post_t = beta_posterior(*prior_t.params, x_t, n_t)        # observed posterior -> predictive weights
+    post_c = beta_posterior(*prior_c.params, x_c, n_c)
+    m_t, m_c = n_planned_t - n_t, n_planned_c - n_c
+    y_t = np.arange(m_t + 1)
+    y_c = np.arange(m_c + 1)
+    if (m_t + 1) * (m_c + 1) > MAX_ENUM_DIFF:                 # thin: keep <= sqrt(cap) points per arm
+        side = max(1, int(MAX_ENUM_DIFF ** 0.5))
+        step_t = max(1, -(-(m_t + 1) // side))                # ceil division
+        step_c = max(1, -(-(m_c + 1) // side))
+        y_t, y_c = y_t[::step_t], y_c[::step_c]
+    w_t = stats.betabinom.pmf(y_t, m_t, post_t[0], post_t[1])
+    w_c = stats.betabinom.pmf(y_c, m_c, post_c[0], post_c[1])
+    w_t = w_t / w_t.sum()                                     # renormalize (exact when unthinned; bins when thinned)
+    w_c = w_c / w_c.sum()
+    go = _go_diff_block(prior_t.params, x_t + y_t, n_planned_t,
+                        prior_c.params, x_c + y_c, n_planned_c, rule)
+    return float(w_t @ go @ w_c)

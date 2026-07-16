@@ -334,3 +334,67 @@ def test_predictive_prob_at_full_enrollment_is_the_final_decision():
     go = bayes.go_grid_binary(prior, 50, RULE)
     for x in (5, 20, 35):
         assert bayes.predictive_prob_success(prior, x, 50, 50, RULE) == pytest.approx(float(go[x]))
+
+
+# ── two-arm predictive probability of success ─────────────────────────────────────────────────────
+DIFF_RULE = bayes.DecisionRule(tv=0.15, lrv=0.0)      # a 15-point benefit hoped for; any benefit is the floor
+
+
+def test_go_grid_diff_shape_and_monotonicity():
+    vague = bayes.Prior("Vague", "beta", (1.0, 1.0), "")
+    go = bayes.go_grid_diff(vague, vague, 30, 30, DIFF_RULE)
+    assert go.shape == (31, 31)
+    # more treatment successes can only help; more control successes can only hurt
+    assert np.all(np.diff(go, axis=0) >= 0)
+    assert np.all(np.diff(go, axis=1) <= 0)
+
+
+def test_predictive_prob_diff_matches_a_brute_force_simulation():
+    """The shipped code enumerates exactly; the TEST simulates, reusing the shipped GO grid as the
+    reference decision (exactly as the single-arm predictive test does)."""
+    vague = bayes.Prior("Vague", "beta", (1.0, 1.0), "")
+    x_t, n_t, x_c, n_c = 14, 30, 8, 30
+    npt = npc = 60
+    exact = bayes.predictive_prob_success_diff(vague, vague, x_t, n_t, x_c, n_c, npt, npc, DIFF_RULE)
+
+    go = bayes.go_grid_diff(vague, vague, npt, npc, DIFF_RULE)
+    rng = np.random.default_rng(0)
+    pa_t, pb_t = bayes.beta_posterior(1.0, 1.0, x_t, n_t)
+    pa_c, pb_c = bayes.beta_posterior(1.0, 1.0, x_c, n_c)
+    th_t = rng.beta(pa_t, pb_t, 300_000)
+    th_c = rng.beta(pa_c, pb_c, 300_000)
+    fut_t = rng.binomial(npt - n_t, th_t)
+    fut_c = rng.binomial(npc - n_c, th_c)
+    sim = float(np.mean(go[x_t + fut_t, x_c + fut_c]))
+    assert exact == pytest.approx(sim, abs=0.005)
+
+
+def test_predictive_prob_diff_at_full_enrolment_is_the_final_decision():
+    vague = bayes.Prior("Vague", "beta", (1.0, 1.0), "")
+    go = bayes.go_grid_diff(vague, vague, 50, 50, DIFF_RULE)
+    for x_t, x_c in [(25, 15), (20, 20), (10, 30)]:
+        got = bayes.predictive_prob_success_diff(vague, vague, x_t, 50, x_c, 50, 50, 50, DIFF_RULE)
+        assert got == pytest.approx(float(go[x_t, x_c]))
+
+
+def test_predictive_prob_diff_high_for_a_strong_treatment_low_for_none():
+    vague = bayes.Prior("Vague", "beta", (1.0, 1.0), "")
+    strong = bayes.predictive_prob_success_diff(vague, vague, 24, 30, 8, 30, 60, 60, DIFF_RULE)
+    none = bayes.predictive_prob_success_diff(vague, vague, 12, 30, 12, 30, 60, 60, DIFF_RULE)
+    assert strong > 0.8
+    assert none < 0.3
+
+
+def test_predictive_prob_diff_thins_above_the_cap_and_stays_close():
+    """Above MAX_ENUM_DIFF the completion grid is thinned; the answer must stay in [0,1] and near the
+    exact value on a case small enough to also compute exactly."""
+    vague = bayes.Prior("Vague", "beta", (1.0, 1.0), "")
+    exact = bayes.predictive_prob_success_diff(vague, vague, 20, 40, 12, 40, 120, 120, DIFF_RULE)
+    saved = bayes.MAX_ENUM_DIFF
+    try:
+        bayes.MAX_ENUM_DIFF = 400                       # force thinning on the same problem
+        thinned = bayes.predictive_prob_success_diff(vague, vague, 20, 40, 12, 40, 120, 120, DIFF_RULE)
+    finally:
+        bayes.MAX_ENUM_DIFF = saved
+    assert 0.0 <= thinned <= 1.0
+    assert thinned == pytest.approx(exact, abs=0.05)
