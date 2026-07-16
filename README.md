@@ -20,7 +20,7 @@ does none of that. I built it as a clinical data scientist working in biostatist
 Everything runs on synthetic EHR data, so there is no PHI and the whole project is public and reproducible.
 
 Live demo: [clinical-insight-agent.streamlit.app](https://clinical-insight-agent.streamlit.app).
-CI runs on every push: `dbt build`, 108 data tests, 230 unit tests, and the guardrail eval.
+CI runs on every push: `dbt build`, 108 data tests, 248 unit tests, and the guardrail eval.
 
 ![Demo: a plain-English question is typed and run; the agent states a hypothesis, writes and executes read-only SQL, renders KPI cards and a confidence-interval chart, and the statistical guardrail flags confounding and a missing denominator before the findings.](assets/demo.gif)
 
@@ -69,7 +69,7 @@ warehouse from scratch, see [Run it locally](#run-it-locally-full-rebuild).
   warehouse is failing a critical integrity test, so a broken pipeline can't quietly feed corrupt metrics
   into an analysis.
 - Built to run in production: the SQL engine is read-only, there is a live monitoring tab, an eval suite,
-  230 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
+  248 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
 
 ---
 
@@ -160,7 +160,8 @@ Two checks keep the agent on data it can trust.
 | "Is treatment non-inferior?" | Non-inferiority | Farrington-Manning test with a Miettinen-Nurminen CI |
 | "How many patients per arm?" | Power / sample-size | n per arm and a sample-size vs power curve |
 | "Should we invest in Phase II?" | Bayesian assurance (design-stage) | GO / CONSIDER / STOP with the probability of success, prior sensitivity, and operating characteristics |
-| "Stop this trial for futility?" | Bayesian interim | Predictive probability of success, posterior with a credible interval, pre-specification status |
+| "Stop this trial for futility?" | Bayesian interim (single-arm) | Predictive probability of success, posterior with a credible interval, pre-specification status |
+| "Continue the drug vs control at interim?" | Bayesian interim (two-arm) | GO / CONSIDER / STOP on the risk difference, per-arm posteriors, exact predictive probability of success |
 | Two-variable association | Pearson / Welch t / ANOVA / χ² | Test statistic and p-value |
 
 Before any model is fit, the data goes through a preparation pass (`_prepare`). Rows missing the outcome are
@@ -185,9 +186,13 @@ stage, "given what we believe about the effect, what is the probability this tri
 (*assurance*, i.e. Bayesian power, which averages over the prior instead of betting the whole answer on one
 assumed effect size), and at an interim look, "given the patients seen so far, will it end in a GO if it runs
 to full enrolment?" (the *predictive probability of success*, the signal that stops a trial for futility and
-saves the money). Both use a **dual-criterion** rule (a Target Value you hope for and a Lower Reference Value
-that is the minimum worth pursuing), so a device performance goal is just the degenerate case where the two
-coincide. Everything is conjugate Beta-Binomial and computed in **closed form** — no Monte Carlo, so a
+saves the money). The interim handles both a **single-arm** trial (a response rate against a fixed goal) and
+a **randomized two-arm** trial (treatment vs a concurrent control), deciding on the **risk difference** with
+an exact predictive probability computed by a joint beta-binomial enumeration over both arms' remaining
+patients — the standard controlled-trial shape, grounded in the published go/no-go literature (Lee & Liu
+2008; BOP2-DC / Zhao et al. 2023). Both use a **dual-criterion** rule (a Target Value you hope for and a
+Lower Reference Value that is the minimum worth pursuing), so a device performance goal is just the
+degenerate case where the two coincide. Everything is conjugate Beta-Binomial and computed in **closed form** — no Monte Carlo, so a
 decision tool never returns a different verdict on re-run. Two guardrails come with it: a **prior-sensitivity
 panel** re-decides under a vague, a skeptical, and an enthusiastic prior and flags the verdict as FRAGILE if
 it flips (FDA's Jan-2026 draft-guidance requirement), and a **pre-specification lock** hashes the prior,
@@ -248,7 +253,7 @@ and 6 named metrics with their statistical caveats is generated from the dbt art
 readable to the agent, and a deterministic token-overlap RAG retrieves over it with no embedding calls.
 
 ### Engineering
-- 230 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
+- 248 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
   charts, agent helpers, modeling, condition-vocabulary grounding, data lineage, and the data-quality gate,
   plus `ruff` and a coverage gate, all run in CI.
 - GitHub Actions CI on every push: Synthea, then DuckDB, then `dbt build` (108 tests), then a catalog
@@ -293,7 +298,7 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
 .venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
-.venv/bin/pytest                           # 230 keyless unit tests   (ruff check . to lint)
+.venv/bin/pytest                           # 248 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -345,7 +350,7 @@ overridable with `OPENAI_MODEL`). CI runs on GitHub Actions; the app is packaged
 │   ├── charts.py, llm.py, observe.py, build_catalog.py
 │   └── eval*.py, guardrail_eval.py, eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       230 keyless pytest unit tests
+├── tests/                       248 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
 ├── Dockerfile, DEPLOY.md
