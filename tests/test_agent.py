@@ -109,3 +109,30 @@ def test_run_assurance_two_arm_takes_the_no_data_path(monkeypatch):
     assert res.model["model_type"] == "assurance"
     assert res.model["robustness"]["framing"] == "two_arm"
     assert res.model["verdict"]["call"] in ("GO", "CONSIDER", "STOP")
+
+
+def test_model_hint_matches_natural_trial_decision_phrasing():
+    """Natural go/no-go phrasing (no explicit trigger word) must reach the router, not fall through
+    to a 'clarification needed' response."""
+    for q in [
+        "Is it worth running this trial?",
+        "Continue or stop?",
+        "Should we keep going?",
+        "Is the drug programme worth pursuing?",
+        "Should we go ahead with the Phase II?",
+        "Should we continue the trial or stop for futility?",
+    ]:
+        assert agent._MODEL_HINT.search(q), q
+
+
+def test_model_hint_does_not_match_ordinary_aggregations():
+    """The decision-context phrases must not misfire on ordinary aggregation questions with incidental
+    words. Each of these matches NEITHER the existing pattern NOR the new phrases."""
+    for q in [
+        "Which patients continue treatment the longest?",   # 'continue treatment', not 'continue the trial'
+        "What's the running total of encounter costs?",     # 'running total', not 'worth running'
+        "Which conditions are worth investigating?",        # 'worth investigating', not 'worth running/pursuing'
+        "Invest more nurses in the ICU?",                   # 'invest more ... in', not the adjacent 'invest in'
+        "List the top procedures by total cost.",
+    ]:
+        assert agent._MODEL_HINT.search(q) is None, q

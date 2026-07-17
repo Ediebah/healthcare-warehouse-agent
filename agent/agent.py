@@ -289,7 +289,11 @@ _MODEL_HINT = re.compile(
     r"should we ship|ship it|ship the|roll ?out|non.?inferior|noninferior|margin|"
     r"sample size|power to detect|how many (patient|subject|participant|per arm)|enroll|powered|"
     r"go.?(or.?)?no.?go|assurance|(probability|chance|likelihood)[^.?!]{0,60}succe|futility|stop early|"
-    r"interim|predictive probability|posterior|bayesian|performance goal|de.?risk)", re.I)
+    r"interim|predictive probability|posterior|bayesian|performance goal|de.?risk|"
+    r"worth (running|pursuing|continuing)|worth the (investment|trial|study)|"
+    r"continue or stop|stop or continue|keep going|"
+    r"continue the (trial|study|program|programme|drug|arm)|"
+    r"should we (continue|proceed|invest|keep going)|go ahead with|invest in)", re.I)
 
 
 def _route(question: str, context: str) -> dict:
