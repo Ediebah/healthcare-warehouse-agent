@@ -654,3 +654,14 @@ def test_two_arm_assurance_accepts_a_negative_lrv():
     r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=-0.05,
                                 control_rate=0.35, prior_successes=14, prior_n=20)
     assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+
+
+def test_two_arm_assurance_lower_is_better_adverse_event():
+    # lower is better: the treatment is expected to have FEWER adverse events than control.
+    # risk difference d = rate_t - rate_c; with higher_is_better=False the target is a NEGATIVE d,
+    # so tv <= lrv is required (a bigger reduction is the target, any reduction is the floor).
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=-0.15, lrv=0.0,
+                                higher_is_better=False, control_rate=0.45,
+                                prior_successes=6, prior_n=20)
+    assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+    assert r.robustness["framing"] == "two_arm"

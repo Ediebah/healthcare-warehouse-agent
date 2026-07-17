@@ -384,6 +384,8 @@ def operating_characteristics_diff(prior_t: Prior, control_rate: float, n_planne
     is the treatment rate. Type I error = GO rate at difference = LRV; power = GO rate at difference = TV."""
     if prior_t.kind != "beta":
         raise ValueError("two-arm operating characteristics support a binary endpoint only")
+    if not 0.0 <= control_rate <= 1.0:
+        raise ValueError("control_rate must be between 0 and 1")
     go = go_grid_diff(prior_t, Prior("Vague", "beta", (1.0, 1.0), ""), n_planned_t, n_planned_c, rule)
     w_c = stats.binom.pmf(np.arange(n_planned_c + 1), n_planned_c, control_rate)
     if grid is None:

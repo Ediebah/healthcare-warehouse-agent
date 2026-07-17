@@ -1645,7 +1645,7 @@ def _calc_assurance_two_arm(endpoint_type, n_planned, tv, lrv, gate_tv, gate_lrv
         lock = _prespec.create_lock(params, oc, anchor=anchor)
 
         mr = ModelResult("assurance", "go/no-go", n_planned, "probability of success",
-                         fit_stat=f"assurance={assur:.1%} · n={n_planned:,} (1:1) · "
+                         fit_stat=f"assurance={assur:.1%} · n={n_t + n_c:,} ({n_t}/arm, 1:1) · "
                                   f"TV={tv:g} / LRV={lrv:g} vs control {control_rate:.0%}",
                          note="Design-stage two-arm Bayesian go/no-go on the risk difference. Assurance "
                               "averages the treatment arm over the prior and the control over its known "
