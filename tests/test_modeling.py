@@ -602,3 +602,66 @@ def test_two_arm_interim_lower_is_better_adverse_event_rate():
     assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
     # treatment event rate (6/40=15%) is well below control (18/40=45%) -> favorable -> not a STOP
     assert r.verdict["call"] in ("GO", "CONSIDER")
+
+
+# ── Bayesian go/no-go: two-arm design-stage assurance ─────────────────────────────────────────────
+def test_two_arm_assurance_go_for_a_strong_expected_effect():
+    # treatment expected ~70% (Phase I 14/20), control 35%, big benefit -> GO
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=0.0,
+                                control_rate=0.35, prior_successes=14, prior_n=20)
+    assert r.error is None and r.verdict["call"] == "GO"
+    assert 0.0 <= r.verdict["assurance"] <= 1.0
+    assert r.robustness["framing"] == "two_arm"
+
+
+def test_two_arm_assurance_flags_underpowered_and_keeps_the_panel():
+    # a small trial with a modest expected benefit -> power at the TV below 80%
+    r = modeling.calc_assurance(framing="two_arm", n_planned=40, tv=0.15, lrv=0.0,
+                                control_rate=0.35, prior_successes=6, prior_n=20)
+    assert r.error is None
+    assert r.robustness["under_powered"] is True
+    assert "under-powered" in " ".join(r.issues).lower()
+    assert len(r.robustness["panel"]) == 4                       # treatment-prior sensitivity panel
+
+
+def test_two_arm_assurance_emits_the_oc_and_planning_curve():
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=0.0,
+                                control_rate=0.35, prior_successes=14, prior_n=20)
+    assert len(r.robustness["oc"]) > 10 and all("theta" in row for row in r.robustness["oc"])
+    assert len(r.series) > 5 and all("assurance" in p for p in r.series)   # assurance-vs-n planning curve
+
+
+def test_two_arm_assurance_lock_round_trips():
+    from agent import prespec
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=0.0,
+                                control_rate=0.35, prior_successes=14, prior_n=20)
+    lock = r.prespec["lock"]
+    assert prespec.verify(lock, lock["params"])["status"] == "PRE-SPECIFIED"
+    assert lock["params"].get("control_rate") == 0.35           # control_rate is captured in the lock
+
+
+def test_two_arm_assurance_requires_a_valid_control_rate():
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=0.0,
+                                prior_successes=14, prior_n=20)
+    assert r.error is not None and "control" in r.error.lower()
+    r2 = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=0.0,
+                                 control_rate=1.4, prior_successes=14, prior_n=20)
+    assert r2.error is not None and "control" in r2.error.lower()
+
+
+def test_two_arm_assurance_accepts_a_negative_lrv():
+    # a risk-difference LRV may be negative (a non-inferiority-style floor) and must not be rejected
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=0.15, lrv=-0.05,
+                                control_rate=0.35, prior_successes=14, prior_n=20)
+    assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+
+
+def test_two_arm_assurance_lower_is_better_adverse_event():
+    # lower is better: the treatment is expected to have FEWER adverse events than control.
+    # risk difference d = rate_t - rate_c; with higher_is_better=False the target is a NEGATIVE d,
+    # so tv <= lrv is required (a bigger reduction is the target, any reduction is the floor).
+    r = modeling.calc_assurance(framing="two_arm", n_planned=200, tv=-0.15, lrv=0.0,
+                                higher_is_better=False, control_rate=0.45,
+                                prior_successes=6, prior_n=20)
+    assert r.error is None and r.verdict["call"] in ("GO", "CONSIDER", "STOP")
+    assert r.robustness["framing"] == "two_arm"

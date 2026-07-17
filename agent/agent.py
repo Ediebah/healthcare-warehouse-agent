@@ -345,6 +345,11 @@ def _route(question: str, context: str) -> dict:
         "a DEVICE performance goal (a single-arm objective performance criterion, e.g. 'success rate "
         "above 85%') set tv AND lrv BOTH to the goal (0.85) and `framing`='single_arm'. Express rates "
         "as proportions (30% -> 0.30). Optional: `higher_is_better` (false for an adverse-event rate).\n"
+        "For a RANDOMIZED / two-arm design (treatment vs a concurrent control or placebo), set "
+        "`framing`='two_arm', `control_rate`=the known control response rate (e.g. standard of care "
+        "responds 35% -> 0.35), and express `tv`/`lrv` as RISK DIFFERENCES treatment-minus-control (a "
+        "15-point benefit hoped for -> tv 0.15; any benefit is the floor -> lrv 0). Supply the treatment "
+        "prior from Phase I as `prior_successes` + `prior_n`. n_planned is the TOTAL across both arms.\n"
         "  'interim'     an INTERIM Bayesian go/no-go on data collected SO FAR — 'we are 40 patients "
         "in with 12 responses, continue or stop', 'stop for futility?', 'predictive probability of "
         "success'. analytic_sql returns ONE ROW PER SUBJECT OBSERVED SO FAR with a binary `outcome` "
@@ -568,7 +573,7 @@ def _run_sample_size(question: str, spec: dict, result: AgentResult,
 
 _ASSURANCE_KEYS = ("endpoint_type", "framing", "n_planned", "tv", "lrv", "gate_tv", "gate_lrv",
                    "stop_lrv", "higher_is_better", "prior_successes", "prior_n", "prior_a",
-                   "prior_b", "prior_mu", "prior_sd", "sd", "anchor")
+                   "prior_b", "prior_mu", "prior_sd", "sd", "anchor", "control_rate")
 
 
 def _run_assurance(question: str, spec: dict, result: AgentResult,

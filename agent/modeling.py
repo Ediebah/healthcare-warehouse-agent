@@ -1454,7 +1454,7 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
                    gate_tv: float = 0.80, gate_lrv: float = 0.90, stop_lrv: float = 0.10,
                    higher_is_better: bool = True,
                    prior_successes=None, prior_n=None, prior_a=None, prior_b=None,
-                   prior_mu=None, prior_sd=None, sd=None, anchor=None) -> ModelResult:
+                   prior_mu=None, prior_sd=None, sd=None, anchor=None, control_rate=None) -> ModelResult:
     """Design-stage Bayesian go/no-go: the probability this trial ends in GO, before it runs.
 
     Classical power asks "what is the chance of success IF the true effect is exactly X". Assurance
@@ -1471,6 +1471,10 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
         tv, lrv = float(tv), float(lrv)
         if n_planned <= 0:
             return _err("the planned sample size must be positive.")
+        if framing == "two_arm":
+            return _calc_assurance_two_arm(endpoint_type, n_planned, tv, lrv, gate_tv, gate_lrv,
+                                           stop_lrv, higher_is_better, prior_successes, prior_n,
+                                           prior_a, prior_b, control_rate, anchor)
         if endpoint_type == "proportion" and not (0 <= tv <= 1 and 0 <= lrv <= 1):
             return _err("for a proportion endpoint the TV and LRV must be between 0 and 1 "
                         "(express 30% as 0.30).")
@@ -1554,6 +1558,126 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
                               "a larger effect than the TV. This makes the assurance depend heavily on that "
                               "optimistic prior; see the prior-sensitivity panel, and treat the classical "
                               "power at the TV as the more conservative planning number.")
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001 — never raise into the app
+        return _err(str(e))
+
+
+def _sensitivity_diff(prior_t, control_rate, n_t, n_c, rule) -> list[dict]:
+    """Two-arm prior-sensitivity panel: vary the TREATMENT prior (informed, vague, skeptical at
+    control+LRV, enthusiastic at control+TV), holding the control rate fixed, and report each prior's
+    assurance and its prior-only difference verdict. The control rate does not vary."""
+    ess = 10.0
+    skept_mean = min(max(control_rate + rule.lrv, 1e-6), 1 - 1e-6)
+    enth_mean = min(max(control_rate + rule.tv, 1e-6), 1 - 1e-6)
+    panel_priors = [
+        prior_t,
+        _bayes.Prior("Vague", "beta", (1.0, 1.0), "Uniform Beta(1,1) on the treatment rate."),
+        _bayes.Prior("Skeptical", "beta", (skept_mean * ess, (1 - skept_mean) * ess),
+                     f"Treatment centred at control + LRV ({skept_mean:g}); ESS {ess:g}."),
+        _bayes.Prior("Enthusiastic", "beta", (enth_mean * ess, (1 - enth_mean) * ess),
+                     f"Treatment centred at control + TV ({enth_mean:g}); ESS {ess:g}."),
+    ]
+    rows = []
+    for p in panel_priors:
+        a, b = p.params
+        thr_tv = min(max(control_rate + rule.tv, 0.0), 1.0)
+        thr_lrv = min(max(control_rate + rule.lrv, 0.0), 1.0)
+        p_tv = _bayes.prob_exceeds("beta", a, b, thr_tv, rule.higher_is_better)
+        p_lrv = _bayes.prob_exceeds("beta", a, b, thr_lrv, rule.higher_is_better)
+        call, _ = _bayes.decide(float(p_tv), float(p_lrv), rule)
+        rows.append({"prior": p.name, "params": [round(float(v), 3) for v in p.params],
+                     "assurance": round(_bayes.assurance_diff(p, control_rate, n_t, n_c, rule), 4),
+                     "call": call, "provenance": p.provenance})
+    return rows
+
+
+def _calc_assurance_two_arm(endpoint_type, n_planned, tv, lrv, gate_tv, gate_lrv, stop_lrv,
+                            higher_is_better, prior_successes, prior_n, prior_a, prior_b,
+                            control_rate, anchor) -> ModelResult:
+    """Design-stage assurance for a randomized two-arm trial: the probability it ends in GO before it
+    runs, deciding on the risk difference against a known control rate."""
+    def _err(msg):
+        return ModelResult("assurance", "go/no-go", 0, "probability of success", error=msg)
+    try:
+        if endpoint_type != "proportion":
+            return _err("two-arm assurance currently supports a binary endpoint only.")
+        if control_rate is None or not (0.0 <= float(control_rate) <= 1.0):
+            return _err("a two-arm assurance needs a known control response rate between 0 and 1.")
+        control_rate = float(control_rate)
+        if not (-1.0 <= tv <= 1.0 and -1.0 <= lrv <= 1.0):
+            return _err("the two-arm TV and LRV are risk differences and must be between -1 and 1 "
+                        "(express a 15-point benefit as 0.15).")
+        if higher_is_better and lrv > tv:
+            return _err("the LRV must not exceed the TV.")
+        if not higher_is_better and tv > lrv:
+            return _err("with a lower-is-better endpoint the TV must not exceed the LRV.")
+
+        rule = _bayes.DecisionRule(tv=tv, lrv=lrv, gate_tv=float(gate_tv), gate_lrv=float(gate_lrv),
+                                   stop_lrv=float(stop_lrv), higher_is_better=bool(higher_is_better))
+        prior_t = _build_prior("proportion", tv, lrv, prior_successes, prior_n, prior_a, prior_b,
+                               None, None)
+        n_t = n_c = n_planned // 2
+
+        # prior-only design verdict: shift the threshold onto the treatment-rate scale by the control
+        a_t, b_t = prior_t.params
+        p_tv = float(_bayes.prob_exceeds("beta", a_t, b_t, min(max(control_rate + tv, 0.0), 1.0),
+                                         higher_is_better))
+        p_lrv = float(_bayes.prob_exceeds("beta", a_t, b_t, min(max(control_rate + lrv, 0.0), 1.0),
+                                          higher_is_better))
+        call, reason = _bayes.decide(p_tv, p_lrv, rule)
+
+        assur = _bayes.assurance_diff(prior_t, control_rate, n_t, n_c, rule)
+        oc = _bayes.operating_characteristics_diff(prior_t, control_rate, n_t, n_c, rule)
+
+        def _oc_at(diff):                                        # GO rate at a given TRUE risk difference
+            return min(oc, key=lambda r: abs(r["theta"] - diff))["go_rate"]
+        t1, power = _oc_at(lrv), _oc_at(tv)
+        under_powered = power < 0.80
+        panel = _sensitivity_diff(prior_t, control_rate, n_t, n_c, rule)
+
+        params = {"endpoint_type": "proportion", "framing": "two_arm", "n_planned": n_planned,
+                  "tv": tv, "lrv": lrv, "gate_tv": gate_tv, "gate_lrv": gate_lrv,
+                  "stop_lrv": stop_lrv, "higher_is_better": higher_is_better,
+                  "prior_a": a_t, "prior_b": b_t, "prior_mu": None, "prior_sd": None,
+                  "control_rate": control_rate}
+        lock = _prespec.create_lock(params, oc, anchor=anchor)
+
+        mr = ModelResult("assurance", "go/no-go", n_planned, "probability of success",
+                         fit_stat=f"assurance={assur:.1%} · n={n_t + n_c:,} ({n_t}/arm, 1:1) · "
+                                  f"TV={tv:g} / LRV={lrv:g} vs control {control_rate:.0%}",
+                         note="Design-stage two-arm Bayesian go/no-go on the risk difference. Assurance "
+                              "averages the treatment arm over the prior and the control over its known "
+                              "rate; it is not a prediction about any one trial. Synthetic data.")
+        mr.verdict = {"call": call, "reason": reason, "assurance": round(assur, 4),
+                      "power": round(power, 4)}
+        mr.series = [{"n": int(nn),
+                      "assurance": round(_bayes.assurance_diff(prior_t, control_rate,
+                                                               int(nn) // 2, int(nn) // 2, rule), 4)}
+                     for nn in np.unique(np.linspace(20, max(40, n_planned * 2), 20).astype(int))]
+        mr.robustness = {"panel": panel, "under_powered": under_powered, "oc": oc, "framing": "two_arm",
+                         "type_i_error": round(t1, 4), "power": round(power, 4)}
+        mr.prespec = {"status": "PRE-SPECIFIED", "lock": lock, "drift": []}
+
+        assur_vals = [r["assurance"] for r in panel]
+        skept = next((r["assurance"] for r in panel if r["prior"] == "Skeptical"), min(assur_vals))
+        issues = [_prespec.caveat({"status": "PRE-SPECIFIED", "drift": []}),
+                  f"Treatment prior: {prior_t.provenance} Control fixed at {control_rate:.0%}.",
+                  f"Prior sensitivity: across the four defensible treatment priors the assurance ranges "
+                  f"from {min(assur_vals):.0%} to {max(assur_vals):.0%} (see the panel) -- a skeptic "
+                  f"(treatment at control + LRV) expects {skept:.0%}, your prior expects {assur:.0%}."]
+        if under_powered:
+            issues.append(f"UNDER-POWERED: power at the TV is only {power:.0%}, below the conventional "
+                          "80%. Even if the true benefit equals the Target Value, this design reaches GO "
+                          f"only {power:.0%} of the time -- the binding limitation here. Increase n.")
+        else:
+            issues.append(f"Adequately powered: power at the TV is {power:.0%} (at or above the "
+                          "conventional 80%): the design can reliably detect a benefit at the Target Value.")
+        issues.append(f"Operating characteristics: type I error {t1:.1%} (GO when the true benefit is only "
+                      f"at the LRV) and power {power:.1%} (GO when it is at the TV).")
+        issues.append("Two-arm design-stage decision support on the risk difference; not a regulatory "
+                      "submission analysis.")
         mr.issues = issues
         return mr
     except Exception as e:  # noqa: BLE001 — never raise into the app

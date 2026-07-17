@@ -94,3 +94,18 @@ def test_fit_model_dispatches_two_arm_interim():
     mr = agent._fit_model(spec, df)
     assert mr.model_type == "interim" and mr.error is None
     assert {a["arm"] for a in mr.arms} == {"treatment", "control"}
+
+
+def test_run_assurance_two_arm_takes_the_no_data_path(monkeypatch):
+    """Two-arm assurance is a DESIGN calculation: it must never touch SQL."""
+    def _boom(*a, **k):
+        raise AssertionError("assurance must not run SQL")
+    monkeypatch.setattr(agent, "run_query", _boom)
+    monkeypatch.setattr(agent, "_interpret_model", lambda *a, **k: "**Findings**\nok")
+
+    spec = {"model_type": "assurance", "framing": "two_arm", "n_planned": 200, "tv": 0.15, "lrv": 0.0,
+            "control_rate": 0.35, "prior_successes": 14, "prior_n": 20, "hypothesis": "h"}
+    res = agent._run_assurance("Will the randomized trial succeed?", spec, agent.AgentResult(question="q"))
+    assert res.model["model_type"] == "assurance"
+    assert res.model["robustness"]["framing"] == "two_arm"
+    assert res.model["verdict"]["call"] in ("GO", "CONSIDER", "STOP")

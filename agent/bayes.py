@@ -355,3 +355,48 @@ def predictive_prob_success_diff(prior_t: Prior, prior_c: Prior, x_t: int, n_t: 
     go = _go_diff_block(prior_t.params, x_t + y_t, n_planned_t,
                         prior_c.params, x_c + y_c, n_planned_c, rule)
     return float(w_t @ go @ w_c)
+
+
+# ── two-arm design-stage assurance ────────────────────────────────────────────────────────────────
+def assurance_diff(prior_t: Prior, control_rate: float, n_planned_t: int, n_planned_c: int,
+                   rule: DecisionRule) -> float:
+    """P(a randomized trial ends in GO), before it runs. The treatment arm is averaged over its
+    prior-predictive (beta-binomial); the control responds at the known control_rate and contributes
+    sampling variability only (binomial). The analysis decision uses a vague control prior, exactly as
+    the shipped two-arm interim decides. Exact -- no Monte Carlo.
+
+        assurance = SUM_{s_t, s_c} BetaBinom(s_t; n_t, prior_t) * Binom(s_c; n_c, control_rate) * go[s_t, s_c]
+    """
+    if prior_t.kind != "beta":
+        raise ValueError("two-arm assurance supports a binary endpoint only")
+    if not 0.0 <= control_rate <= 1.0:
+        raise ValueError("control_rate must be between 0 and 1")
+    go = go_grid_diff(prior_t, Prior("Vague", "beta", (1.0, 1.0), ""), n_planned_t, n_planned_c, rule)
+    w_t = stats.betabinom.pmf(np.arange(n_planned_t + 1), n_planned_t, *prior_t.params)
+    w_c = stats.binom.pmf(np.arange(n_planned_c + 1), n_planned_c, control_rate)
+    return float(w_t @ go @ w_c)
+
+
+def operating_characteristics_diff(prior_t: Prior, control_rate: float, n_planned_t: int,
+                                   n_planned_c: int, rule: DecisionRule, grid=None) -> list[dict]:
+    """The GO rate at each TRUE risk difference, with control fixed at control_rate. `theta` carries the
+    risk difference (treatment rate - control_rate) so the existing OC chart plots it correctly; `theta_t`
+    is the treatment rate. Type I error = GO rate at difference = LRV; power = GO rate at difference = TV."""
+    if prior_t.kind != "beta":
+        raise ValueError("two-arm operating characteristics support a binary endpoint only")
+    if not 0.0 <= control_rate <= 1.0:
+        raise ValueError("control_rate must be between 0 and 1")
+    go = go_grid_diff(prior_t, Prior("Vague", "beta", (1.0, 1.0), ""), n_planned_t, n_planned_c, rule)
+    w_c = stats.binom.pmf(np.arange(n_planned_c + 1), n_planned_c, control_rate)
+    if grid is None:
+        span = abs(rule.tv - rule.lrv) or 0.1
+        base = np.clip(np.linspace(control_rate + rule.lrv - 2 * span,
+                                   control_rate + rule.tv + 2 * span, 99), 0.0, 1.0)
+        grid = np.union1d(base, np.clip([control_rate + rule.lrv, control_rate + rule.tv], 0.0, 1.0))
+    xs = np.arange(n_planned_t + 1)
+    out = []
+    for theta_t in np.asarray(grid, dtype=float):
+        w_t = stats.binom.pmf(xs, n_planned_t, theta_t)
+        out.append({"theta": float(theta_t - control_rate), "theta_t": float(theta_t),
+                    "go_rate": float(w_t @ go @ w_c)})
+    return out
