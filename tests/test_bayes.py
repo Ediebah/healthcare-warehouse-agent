@@ -398,3 +398,49 @@ def test_predictive_prob_diff_thins_above_the_cap_and_stays_close():
         bayes.MAX_ENUM_DIFF = saved
     assert 0.0 <= thinned <= 1.0
     assert thinned == pytest.approx(exact, abs=0.05)
+
+
+# ── two-arm design-stage assurance ────────────────────────────────────────────────────────────────
+ADIFF_RULE = bayes.DecisionRule(tv=0.15, lrv=0.0)      # a 15-point benefit hoped for; any benefit is the floor
+
+
+def test_assurance_diff_matches_a_brute_force_simulation():
+    """The shipped code computes the exact mixed sum; the TEST simulates, reusing the shipped GO grid."""
+    prior_t = bayes.Prior("informed", "beta", (12.0, 10.0), "")   # treatment prior, mean ~0.55
+    control_rate, npt, npc = 0.35, 60, 60
+    exact = bayes.assurance_diff(prior_t, control_rate, npt, npc, ADIFF_RULE)
+
+    go = bayes.go_grid_diff(prior_t, bayes.Prior("Vague", "beta", (1.0, 1.0), ""), npt, npc, ADIFF_RULE)
+    rng = np.random.default_rng(0)
+    theta_t = rng.beta(12.0, 10.0, 300_000)                       # treatment truth ~ prior
+    s_t = rng.binomial(npt, theta_t)                             # treatment count | theta_t
+    s_c = rng.binomial(npc, control_rate, 300_000)               # control count at the known rate
+    sim = float(np.mean(go[s_t, s_c]))
+    assert exact == pytest.approx(sim, abs=0.005)
+
+
+def test_assurance_diff_high_when_treatment_beats_control_low_when_not():
+    strong = bayes.assurance_diff(bayes.Prior("t", "beta", (30.0, 10.0), ""), 0.30, 80, 80, ADIFF_RULE)
+    none = bayes.assurance_diff(bayes.Prior("t", "beta", (9.0, 21.0), ""), 0.30, 80, 80, ADIFF_RULE)
+    assert strong > 0.8      # treatment prior mean 0.75 vs control 0.30 -> well past a 15-point benefit
+    assert none < 0.2        # treatment prior mean 0.30 == control -> no benefit
+
+
+def test_assurance_diff_rejects_a_non_binary_prior_and_bad_control_rate():
+    with pytest.raises(ValueError):
+        bayes.assurance_diff(bayes.Prior("n", "normal", (0.5, 0.1), ""), 0.3, 40, 40, ADIFF_RULE)
+    with pytest.raises(ValueError):
+        bayes.assurance_diff(bayes.Prior("t", "beta", (5.0, 5.0), ""), 1.4, 40, 40, ADIFF_RULE)
+
+
+def test_operating_characteristics_diff_rises_and_brackets_type_i_and_power():
+    prior_t = bayes.Prior("t", "beta", (12.0, 10.0), "")
+    control_rate = 0.35
+    oc = bayes.operating_characteristics_diff(prior_t, control_rate, 80, 80, ADIFF_RULE)
+    rates = [r["go_rate"] for r in oc]
+    assert rates == sorted(rates)                                # GO rate rises with the true difference
+    # type I error = GO rate at difference = LRV; power = GO rate at difference = TV
+    def _at(diff):
+        return min(oc, key=lambda r: abs(r["theta"] - diff))["go_rate"]
+    assert _at(ADIFF_RULE.lrv) < _at(ADIFF_RULE.tv)
+    assert all("theta_t" in r and "theta" in r for r in oc)     # theta = risk difference, theta_t = trt rate
