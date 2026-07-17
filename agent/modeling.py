@@ -1429,9 +1429,10 @@ def _build_prior(endpoint_type, tv, lrv, prior_successes, prior_n, prior_a, prio
                         "Uniform Beta(1,1) (no prior study supplied): every response rate equally likely.")
 
 
-def _sensitivity(prior, n_planned, rule, sd) -> tuple[list[dict], bool]:
-    """Re-decide under each defensible prior. A verdict that flips is FRAGILE, not an answer."""
-    rows, calls = [], []
+def _sensitivity(prior, n_planned, rule, sd) -> list[dict]:
+    """The prior-sensitivity panel: each defensible prior's assurance and its prior-only verdict. The
+    assurance column shows how much the probability of success depends on the choice of prior."""
+    rows = []
     for p in _bayes.prior_panel(prior, rule):
         if p.kind == "beta":
             a, b = p.params
@@ -1445,8 +1446,7 @@ def _sensitivity(prior, n_planned, rule, sd) -> tuple[list[dict], bool]:
         rows.append({"prior": p.name, "params": [round(float(v), 3) for v in p.params],
                      "assurance": round(_bayes.assurance(p, n_planned, rule, sd), 4),
                      "call": call, "provenance": p.provenance})
-        calls.append(call)
-    return rows, len(set(calls)) > 1
+    return rows
 
 
 def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm",
@@ -1494,7 +1494,8 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
         assur = _bayes.assurance(prior, n_planned, rule, sd)
         oc = _bayes.operating_characteristics(prior, n_planned, rule, sd)
         t1, power = _bayes.type_i_and_power(prior, n_planned, rule, sd)
-        panel, fragile = _sensitivity(prior, n_planned, rule, sd)
+        panel = _sensitivity(prior, n_planned, rule, sd)
+        under_powered = power < 0.80
 
         params = {"endpoint_type": endpoint_type, "framing": framing, "n_planned": n_planned,
                   "tv": tv, "lrv": lrv, "gate_tv": gate_tv, "gate_lrv": gate_lrv,
@@ -1514,20 +1515,25 @@ def calc_assurance(endpoint_type: str = "proportion", framing: str = "single_arm
                       "power": round(power, 4)}
         mr.series = [{"n": int(nn), "assurance": round(_bayes.assurance(prior, int(nn), rule, sd), 4)}
                      for nn in np.unique(np.linspace(10, max(20, n_planned * 2), 20).astype(int))]
-        mr.robustness = {"panel": panel, "fragile": fragile, "oc": oc, "framing": framing,
+        mr.robustness = {"panel": panel, "under_powered": under_powered, "oc": oc, "framing": framing,
                          "type_i_error": round(t1, 4), "power": round(power, 4)}
         mr.prespec = {"status": "PRE-SPECIFIED", "lock": lock, "drift": []}
 
         issues = [_prespec.caveat({"status": "PRE-SPECIFIED", "drift": []}),
                   f"Prior: {prior.provenance}"]
-        if fragile:
-            flips = ", ".join(f"{r['prior']} -> {r['call']}" for r in panel)
-            issues.append(f"FRAGILE: the verdict is not stable across defensible priors ({flips}). "
-                          "A skeptical reader would not yet be convinced; this is a prior-driven call, "
-                          "not a data-driven one.")
+        assur_vals = [r["assurance"] for r in panel]
+        skept = next((r["assurance"] for r in panel if r["prior"] == "Skeptical"), min(assur_vals))
+        issues.append(f"Prior sensitivity: across the four defensible priors the assurance ranges from "
+                      f"{min(assur_vals):.0%} to {max(assur_vals):.0%} (see the panel) -- a skeptic "
+                      f"centred at the LRV expects {skept:.0%}, your prior expects {assur:.0%}.")
+        if under_powered:
+            issues.append(f"UNDER-POWERED: power at the TV is only {power:.0%}, below the conventional "
+                          "80%. Even if the true effect equals the Target Value, this design reaches GO "
+                          f"only {power:.0%} of the time -- the binding limitation here, more than the "
+                          "choice of prior. Increase n or revisit the design.")
         else:
-            issues.append(f"Prior sensitivity: the {call} verdict HOLDS across all four defensible "
-                          "priors (informed, vague, skeptical, enthusiastic).")
+            issues.append(f"Adequately powered: power at the TV is {power:.0%} (at or above the "
+                          "conventional 80%): the design can reliably detect an effect at the Target Value.")
         issues.append(f"Operating characteristics: type I error {t1:.1%} (the chance of a GO when the "
                       f"true effect is only at the LRV) and power {power:.1%} (the chance of a GO when "
                       f"it is at the TV).")

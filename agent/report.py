@@ -392,7 +392,9 @@ def build_docx(result, *, when: _dt.datetime | None = None) -> bytes:
                 c[0].text = str(row["prior"]); c[1].text = str(row["params"])
                 c[2].text = f"{row['assurance']:.1%}"; c[3].text = str(row["call"])
             _footnote(doc, "FDA's Jan-2026 draft Bayesian guidance requires a prior-sensitivity "
-                           "analysis. A FRAGILE verdict is reported as fragile, not as an answer.")
+                           "analysis: the panel shows how the probability of success varies across "
+                           "defensible priors. The operating characteristics below flag whether the "
+                           "design is adequately powered.")
         if rb.get("type_i_error") is not None:
             table_caption("Operating characteristics implied by the pre-specified decision rule.")
             ot = doc.add_table(rows=1, cols=2); ot.style = "Table Grid"

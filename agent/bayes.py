@@ -107,10 +107,11 @@ def prior_ess(prior: Prior) -> float:
 
 
 def prior_panel(informed: Prior, rule: DecisionRule) -> list[Prior]:
-    """Four defensible priors. If the verdict flips across them it is FRAGILE, not an answer.
+    """Four defensible priors for a prior-sensitivity analysis: the assurance under each shows how much
+    the probability of success depends on the choice of prior.
 
-    This is FDA's prior-sensitivity requirement (Jan 2026 draft guidance): show that the trial's
-    conclusion is robust across plausible alternative priors, not an artefact of one choice.
+    This is FDA's prior-sensitivity requirement (Jan 2026 draft guidance): show how the trial's
+    probability of success varies across plausible alternative priors, not just under one choice.
     """
     if informed.kind != "beta":
         _, sd = informed.params

@@ -334,13 +334,26 @@ def test_assurance_reports_the_prior_and_its_provenance():
     assert "Beta(9" in joined and "8" in joined and "20" in joined     # Beta(1,1) + 8/20 -> Beta(9,13)
 
 
-def test_assurance_flags_a_fragile_verdict_when_the_skeptical_prior_flips_it():
-    # engineered so the informed prior says GO but a skeptic is not yet convinced -> must be fragile
-    r = modeling.calc_assurance(n_planned=40, tv=0.30, lrv=0.15, prior_successes=14, prior_n=20)
+def test_assurance_flags_an_underpowered_design():
+    # a GO whose power at the TV is far below 80% must be flagged UNDER-POWERED, not silently passed.
+    # Phase I 8/20 vs TV 0.30 / LRV 0.15 at n=100 -> GO but power ~29%.
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=8, prior_n=20)
+    assert r.error is None and r.verdict["call"] == "GO"
+    assert r.robustness["under_powered"] is True
     joined = " ".join(r.issues).lower()
-    assert r.robustness["fragile"] is True
-    assert "fragile" in joined and "verdict holds across" not in joined
-    assert any(row["prior"] == "Skeptical" for row in r.robustness["panel"])
+    assert "under-powered" in joined
+    assert any(row["prior"] == "Skeptical" for row in r.robustness["panel"])   # panel retained
+
+
+def test_assurance_does_not_flag_a_well_powered_design():
+    # a GO with power >= 80% at the TV must NOT be flagged under-powered, and carries no FRAGILE text.
+    # Phase I 16/20 -> GO with power ~89%.
+    r = modeling.calc_assurance(n_planned=100, tv=0.30, lrv=0.15, prior_successes=16, prior_n=20)
+    assert r.error is None and r.verdict["call"] == "GO"
+    assert r.robustness["under_powered"] is False
+    joined = " ".join(r.issues).lower()
+    assert "under-powered" not in joined and "fragile" not in joined
+    assert len(r.robustness["panel"]) == 4                                     # panel retained
 
 
 def test_assurance_emits_operating_characteristics():

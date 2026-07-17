@@ -194,8 +194,10 @@ patients — the standard controlled-trial shape, grounded in the published go/n
 Lower Reference Value that is the minimum worth pursuing), so a device performance goal is just the
 degenerate case where the two coincide. Everything is conjugate Beta-Binomial and computed in **closed form** — no Monte Carlo, so a
 decision tool never returns a different verdict on re-run. Two guardrails come with it: a **prior-sensitivity
-panel** re-decides under a vague, a skeptical, and an enthusiastic prior and flags the verdict as FRAGILE if
-it flips (FDA's Jan-2026 draft-guidance requirement), and a **pre-specification lock** hashes the prior,
+panel** that reports how the probability of success varies across a vague, a skeptical, and an enthusiastic
+prior (FDA's Jan-2026 draft-guidance requirement), with the design flagged **under-powered** when its power
+at the Target Value falls below the conventional 80% — the operating characteristic that actually measures
+whether the trial can detect the effect — and a **pre-specification lock** hashes the prior,
 thresholds, and planned n at design stage so an interim run can be stamped PRE-SPECIFIED, DRIFTED (naming
 every field that moved), or EXPLORATORY. The lock is honest about its own limits: a content hash proves
 integrity, not anteriority, so it points you at a protocol or registry entry for that. This is decision
