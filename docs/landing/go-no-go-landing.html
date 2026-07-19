@@ -182,6 +182,16 @@
     .board .foot{font-family:var(--mono); font-size:.72rem; color:var(--muted); margin-top:.4rem}
     .board .foot b{color:var(--accent-ink)}
 
+    /* ---- clinical evaluation: decision curve + failure analysis ---- */
+    .eval{display:grid; grid-template-columns:1.05fr .95fr; gap:clamp(1.5rem,4vw,3rem); align-items:center}
+    @media (max-width:52rem){ .eval{grid-template-columns:1fr; gap:1.5rem} }
+    canvas#mini-dca{display:block; width:100%; height:170px; margin-top:.35rem}
+    .fail .eyebrow{display:block; margin-bottom:.5rem}
+    .fail p{margin:0; color:var(--muted)}
+    .fail .stats{list-style:none; padding:0; margin:.9rem 0 0; display:flex; flex-direction:column; gap:.7rem}
+    .fail .stats li{color:var(--muted); font-size:.95rem; padding-left:.9rem; border-left:2px solid var(--hairline)}
+    .fail .stats li b{color:var(--ink); font-weight:600}
+
     /* ---- self-healing: three-step loop ---- */
     .heal{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--hairline); border:1px solid var(--hairline); border-radius:14px; overflow:hidden}
     @media (max-width:40rem){ .heal{grid-template-columns:1fr} }
@@ -418,6 +428,31 @@
   <section>
     <div class="wrap">
       <div class="sec-head">
+        <h2>Evaluated for the clinic, not just scored</h2>
+        <p>A high AUC doesn't mean a model helps or can be trusted. Two lenses go further &mdash; on out-of-fold predictions, so nothing is optimistic.</p>
+      </div>
+      <div class="eval">
+        <div class="board">
+          <div class="cap">decision curve &middot; heart disease &middot; net benefit</div>
+          <canvas id="mini-dca" aria-hidden="true"></canvas>
+          <div class="foot">the <b>model</b> beats treat-all and treat-none at every clinical threshold &mdash; it is worth acting on</div>
+        </div>
+        <div class="fail">
+          <span class="eyebrow">Failure analysis</span>
+          <p>The same run asks where the model breaks, so a number is never taken on faith:</p>
+          <ul class="stats">
+            <li><b>Calibration</b> holds across risk deciles (predicted 0.48 &rarr; observed 0.41, and so on) &mdash; a max gap of 10%.</li>
+            <li><b>Errors</b> at a 0.5 cut: 18 false positives, 27 false negatives.</li>
+            <li><b>Worst subgroup</b>: typical-angina chest pain, misclassified 35% &mdash; exactly where to look next.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="sec-head">
         <h2>How a question becomes an answer</h2>
         <p>One plain-English question runs an entire analysis. The UI shows every step, with the cost and latency of the run.</p>
       </div>
@@ -479,6 +514,11 @@
               <td class="meth">Machine learning<br>(random forest)</td>
               <td class="src">Wisconsin Diagnostic Breast Cancer<br><cite>Wolberg et al., 1995</cite></td>
               <td class="repro">cross-validated AUC 0.99<br>settled tumour markers on top</td>
+            </tr>
+            <tr>
+              <td class="meth">Survival ML<br>(random survival forest)</td>
+              <td class="src">UCI Heart Failure Clinical Records<br><cite>Chicco &amp; Jurman, 2020</cite></td>
+              <td class="repro">beats Cox on the survival composite<br>C-index 0.75 &middot; recovers EF + creatinine</td>
             </tr>
             <tr>
               <td class="meth">Model selection<br>(compare &amp; pick)</td>
@@ -712,10 +752,43 @@
     });
   }
 
+  // decision curve: net benefit of the model vs treat-all vs treat-none across thresholds
+  function drawDCA(cv,p){
+    var s=fit(cv); if(!s.w) return; var ctx=s.ctx,w=s.w,h=s.h;
+    var model=[[.05,.436],[.1,.414],[.15,.393],[.2,.375],[.25,.357],[.3,.34],[.35,.327],[.4,.309],
+               [.45,.312],[.5,.31],[.55,.29],[.6,.268]];
+    var all=[[.05,.433],[.1,.401],[.15,.366],[.2,.327],[.25,.282],[.3,.23],[.35,.171],[.4,.102],
+             [.45,.021],[.5,-.077],[.55,-.197],[.6,-.347]];
+    var padL=8,padR=42,padT=12,padB=18, x0=0.03,x1=0.62, y0=-0.36,y1=0.47;
+    function X(t){ return padL+(t-x0)/(x1-x0)*(w-padL-padR); }
+    function Y(v){ return padT+(1-(v-y0)/(y1-y0))*(h-padT-padB); }
+    var accent=css('--accent'), muted=css('--muted'), hair=css('--hairline'), ai=css('--accent-ink');
+    ctx.strokeStyle=hair; ctx.lineWidth=1; ctx.setLineDash([3,4]);          // treat-none = 0 baseline
+    ctx.beginPath(); ctx.moveTo(X(x0),Y(0)); ctx.lineTo(X(x1),Y(0)); ctx.stroke(); ctx.setLineDash([]);
+    var count=Math.max(2,Math.round(model.length*Math.max(0,Math.min(1,p))));
+    function line(pts,color,width){
+      ctx.strokeStyle=color; ctx.lineWidth=width; ctx.lineJoin='round'; ctx.beginPath();
+      for(var i=0;i<count;i++){ var x=X(pts[i][0]),y=Y(pts[i][1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+      ctx.stroke();
+    }
+    line(all, muted, 1.6);
+    line(model, accent, 2.4);
+    ctx.font=MONO; ctx.textBaseline='middle';
+    if(p>0.85){
+      var j=count-1;
+      ctx.textAlign='left'; ctx.fillStyle=ai; ctx.fillText('model', X(model[j][0])+5, Y(model[j][1]));
+      ctx.fillStyle=muted; ctx.fillText('treat all', X(all[j][0])+5, Y(all[j][1]));
+      ctx.fillText('none', X(x1)+5, Y(0));
+    }
+    ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillStyle=muted;
+    ctx.fillText('decision threshold →', padL, h-padB+4);
+  }
+
   animateInView(document.getElementById('mini-forest'),      drawForest,      1000);
   animateInView(document.getElementById('mini-km'),          drawKM,          1150);
   animateInView(document.getElementById('mini-ab'),          drawAB,           950);
   animateInView(document.getElementById('mini-leaderboard'), drawLeaderboard, 1050);
+  animateInView(document.getElementById('mini-dca'),         drawDCA,         1100);
 
   function renderStatic(){ drawCover(1); drawCurve(1); miniRedraw.forEach(function(f){ f(); }); }
 
