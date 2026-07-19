@@ -57,8 +57,9 @@ warehouse from scratch, see [Run it locally](#run-it-locally-full-rebuild).
 - Picks the model the question calls for and fits it with `statsmodels` or `scikit-learn`, so the numbers are
   computed rather than generated: regression, survival, causal effects, A/B ship-decisions, non-inferiority,
   forecasting, feature importance, and power or sample-size for study design. When you want the *best*
-  predictor, it compares candidate models (logistic/linear, random forest, gradient boosting) by
-  cross-validation and keeps the winner — so uploaded data gets the model that fits it, not a default.
+  predictor, it compares candidate models (logistic/linear, random forest, gradient boosting) by a
+  cross-validated composite score and keeps the winner — so uploaded data gets the model that fits it,
+  not a default.
 - Applies the statistics a plain SQL tool skips: covariate adjustment, confidence intervals throughout, FDR
   correction for multiple comparisons, checks for confounding and Simpson's paradox, and model-assumption
   diagnostics.
@@ -98,10 +99,10 @@ compares candidate models and lands on each publication's own choice:
   agent's random forest reaches a cross-validated **AUC of 0.99**, inside the reported benchmark band,
   with the settled tumour markers (size, concavity) on top.
 - **Model selection** — the agent doesn't hard-code a model. `compare_models` cross-validates logistic
-  (or linear), random forest, and gradient boosting and keeps the winner. On the three datasets above it
-  lands on each publication's own choice — logistic for heart disease, and the **random forest for heart
-  failure**, exactly as Chicco & Jurman (2020) found. So an uploaded dataset gets the model that fits
-  *it*, not a default.
+  (or linear), random forest, and gradient boosting by a **composite score** (mean of ROC-AUC, PR-AUC,
+  and balanced accuracy) and keeps the winner. On the three datasets above it lands on each publication's
+  own choice — logistic for heart disease, and the **random forest for heart failure**, exactly as
+  Chicco & Jurman (2020) found. So an uploaded dataset gets the model that fits *it*, not a default.
 
 It is the same `agent/modeling.py` code the app runs, and every reproduction is **CI-enforced**
 (`tests/test_validation.py`), so a change that quietly breaks the modeling is caught against real

@@ -400,13 +400,14 @@
       <div class="pick">
         <div class="blurb">
           <p>Ask for the best predictor and the agent fits logistic regression, a random forest, and gradient
-            boosting, scores each by cross-validated AUC, and returns a leaderboard with the winner. On the
-            UCI heart-failure data it picks the <b style="color:var(--ink)">random forest</b> &mdash; the same
-            model <cite>Chicco &amp; Jurman (2020)</cite> chose when they compared models, with serum creatinine
-            and ejection fraction as the top predictors.</p>
+            boosting, scores each by a cross-validated <b style="color:var(--ink)">composite</b> (ROC-AUC,
+            PR-AUC, and balanced accuracy), and returns a leaderboard with the winner. On the UCI heart-failure
+            data it picks the <b style="color:var(--ink)">random forest</b> &mdash; the same model
+            <cite>Chicco &amp; Jurman (2020)</cite> chose when they compared models, with serum creatinine and
+            ejection fraction as the top predictors.</p>
         </div>
         <div class="board">
-          <div class="cap">heart failure &middot; 5-fold cross-validated AUC</div>
+          <div class="cap">heart failure &middot; 5-fold cross-validated composite</div>
           <canvas id="mini-leaderboard" aria-hidden="true"></canvas>
           <div class="foot">engine picked <b>random forest</b> &mdash; matching the publication</div>
         </div>
@@ -690,8 +691,8 @@
   // model-selection leaderboard: three candidates ranked by cross-validated AUC, winner in accent
   function drawLeaderboard(cv,p){
     var s=fit(cv); if(!s.w) return; var ctx=s.ctx,w=s.w,h=s.h;
-    var rows=[{m:'random forest',auc:0.773,win:true},{m:'logistic regression',auc:0.769},
-              {m:'gradient boosting',auc:0.722}];
+    var rows=[{m:'random forest',s:0.713,win:true},{m:'logistic regression',s:0.700},
+              {m:'gradient boosting',s:0.635}];
     var padL=w*0.40, padR=54, padT=12, padB=14, x0=0.5, x1=0.85;
     function X(v){ return padL+(v-x0)/(x1-x0)*(w-padL-padR); }
     var accent=css('--accent'), hair=css('--hairline'), muted=css('--muted'), ink=css('--ink'),
@@ -699,14 +700,14 @@
     var n=rows.length, gap=(h-padT-padB)/n, bh=Math.min(18, gap*0.5);
     ctx.textBaseline='middle';
     rows.forEach(function(r,i){
-      var y=padT+gap*(i+0.5), len=(X(r.auc)-padL)*Math.max(0,Math.min(1,p*1.25-i*0.12));
+      var y=padT+gap*(i+0.5), len=(X(r.s)-padL)*Math.max(0,Math.min(1,p*1.25-i*0.12));
       ctx.textAlign='right'; ctx.font=MONO; ctx.fillStyle=r.win?ink:muted;
       ctx.fillText(r.m, padL-8, y);
       ctx.fillStyle=surf2; ctx.fillRect(padL, y-bh/2, X(x1)-padL, bh);
       ctx.fillStyle=r.win?accent:hair; ctx.fillRect(padL, y-bh/2, len, bh);
       if(p>0.55){
         ctx.textAlign='left'; ctx.fillStyle=r.win?ai:muted; ctx.font=(r.win?'600 ':'')+MONO;
-        ctx.fillText(r.auc.toFixed(3)+(r.win?'  ←':''), X(x1)+6, y);
+        ctx.fillText(r.s.toFixed(3)+(r.win?'  ←':''), X(x1)+6, y);
       }
     });
   }

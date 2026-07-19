@@ -683,6 +683,8 @@ def test_compare_models_classification_ranks_and_picks_a_winner():
     assert sum(row["is_winner"] for row in r.leaderboard) == 1    # exactly one winner
     assert r.verdict["winner"] == r.leaderboard[0]["model"]
     assert r.terms and "CV" in r.fit_stat                         # winner's own interpretable output
+    assert all(row["metric"] == "composite" for row in r.leaderboard)   # ranked by a composite score
+    assert all({"roc_auc", "pr_auc", "bal_acc"} <= set(row["components"]) for row in r.leaderboard)
 
 
 def test_compare_models_is_deterministic():
@@ -697,7 +699,7 @@ def test_compare_models_is_deterministic():
     assert a.verdict["winner"] == b.verdict["winner"]
 
 
-def test_compare_models_regression_uses_r2_panel():
+def test_compare_models_regression_uses_composite_panel():
     rng = np.random.default_rng(2)
     n = 400
     x1, x2, noise = rng.normal(0, 1, n), rng.normal(0, 1, n), rng.normal(0, 1, n)
@@ -707,7 +709,8 @@ def test_compare_models_regression_uses_r2_panel():
     assert r.error is None and r.robustness["task"] == "regression"
     assert {row["model"] for row in r.leaderboard} == {"linear regression", "random forest",
                                                        "gradient boosting"}
-    assert all(row["metric"] == "R²" for row in r.leaderboard)
+    assert all(row["metric"] == "composite" for row in r.leaderboard)
+    assert all({"r2", "expl_var"} <= set(row["components"]) for row in r.leaderboard)
 
 
 def test_compare_models_rejects_too_little_data():

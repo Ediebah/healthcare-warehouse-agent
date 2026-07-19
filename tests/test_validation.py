@@ -173,18 +173,25 @@ _HF_PREDICTORS_FULL = ["age", "ejection_fraction", "serum_creatinine", "serum_so
                        "creatinine_phosphokinase", "platelets", "smoking"]
 
 
+def test_model_selection_ranks_by_a_composite_of_three_metrics():
+    r = modeling.compare_models(_data(), "heart_disease", _PREDICTORS)
+    assert r.error is None
+    assert all(row["metric"] == "composite" for row in r.leaderboard)   # not AUC alone
+    assert all({"roc_auc", "pr_auc", "bal_acc"} <= set(row["components"]) for row in r.leaderboard)
+
+
 def test_model_selection_heart_disease_reproduces_the_classic_logistic():
     r = modeling.compare_models(_data(), "heart_disease", _PREDICTORS)
     assert r.error is None and len(r.leaderboard) == 3
     lr = next(row for row in r.leaderboard if row["model"] == "logistic regression")
-    assert 0.84 <= lr["score"] <= 0.93                       # the classic model reproduces its band
-    assert 0.84 <= r.leaderboard[0]["score"] <= 1.0          # the winner is at least as good
+    assert 0.84 <= lr["components"]["roc_auc"] <= 0.93       # reproduces the published AUC band
+    assert r.leaderboard[0]["score"] >= 0.84                 # the winner's composite is strong
 
 
 def test_model_selection_heart_failure_matches_chicco_jurman():
     r = modeling.compare_models(_hf(), "DEATH_EVENT", _HF_PREDICTORS_FULL)
     assert r.error is None
-    assert r.leaderboard[0]["score"] >= 0.70                 # reaches the reported discrimination
+    assert r.leaderboard[0]["components"]["roc_auc"] >= 0.72    # reaches the reported discrimination
     assert "random forest" in [row["model"] for row in r.leaderboard[:2]]   # the paper's chosen model
     # the paper's headline: serum creatinine + ejection fraction dominate (winner-independent check)
     rf = modeling.fit_forest(_hf(), "DEATH_EVENT", _HF_PREDICTORS_FULL)
@@ -196,5 +203,5 @@ def test_model_selection_breast_cancer_every_candidate_is_strong():
     d = _bc()
     r = modeling.compare_models(d, "malignant", [c for c in d.columns if c != "malignant"])
     assert r.error is None
-    assert all(row["score"] >= 0.96 for row in r.leaderboard)   # WDBC is a benchmark all three clear
-    assert r.leaderboard[0]["score"] >= 0.98                     # and the winner clears 0.98
+    assert all(row["components"]["roc_auc"] >= 0.96 for row in r.leaderboard)   # benchmark all clear
+    assert r.leaderboard[0]["components"]["roc_auc"] >= 0.98                     # winner clears 0.98

@@ -730,7 +730,7 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
         )
         from sklearn.impute import SimpleImputer
         from sklearn.linear_model import LinearRegression, LogisticRegression
-        from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
+        from sklearn.model_selection import KFold, StratifiedKFold, cross_validate
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import StandardScaler
 
@@ -760,7 +760,11 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
             if minority < 20:
                 issues.append(f"Rare outcome ({minority} in the smaller class): scores use {n_splits} folds "
                               "and are unstable — read the ranking with caution.")
-            scoring, metric = "roc_auc", "AUC"
+            # composite = mean of threshold-free discrimination (ROC-AUC), imbalance-aware precision-recall
+            # (PR-AUC), and balanced-accuracy threshold performance — one number that rewards a model on
+            # ranking AND calibrated classification, not AUC alone.
+            scorers = {"roc_auc": "roc_auc", "pr_auc": "average_precision", "bal_acc": "balanced_accuracy"}
+            metric = "composite"
             cv = StratifiedKFold(n_splits, shuffle=True, random_state=0)
             candidates = {
                 "logistic regression": Pipeline([imp, ("scale", StandardScaler()),
@@ -774,7 +778,8 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
         else:
             y = d[outcome].astype(float)
             n_splits = 5
-            scoring, metric = "r2", "R²"
+            scorers = {"r2": "r2", "expl_var": "explained_variance"}   # composite = mean of both
+            metric = "composite"
             cv = KFold(5, shuffle=True, random_state=0)
             candidates = {
                 "linear regression": Pipeline([imp, ("scale", StandardScaler()),
@@ -786,8 +791,11 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
 
         board = []
         for name, pipe in candidates.items():
-            s = cross_val_score(pipe, X, y, cv=cv, scoring=scoring)
-            board.append({"model": name, "metric": metric, "score": float(s.mean()), "std": float(s.std())})
+            cvr = cross_validate(pipe, X, y, cv=cv, scoring=scorers)
+            comps = {k: float(cvr["test_" + k].mean()) for k in scorers}   # each component's CV mean
+            score = float(np.mean(list(comps.values())))                    # the composite
+            std = float(np.mean([cvr["test_" + k].std() for k in scorers]))
+            board.append({"model": name, "metric": metric, "score": score, "std": std, "components": comps})
         board.sort(key=lambda r: (r["score"], r["model"]), reverse=True)     # deterministic tie-break
         for i, row in enumerate(board):
             row["is_winner"] = (i == 0)
@@ -804,7 +812,8 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
             det = fit_forest(df, outcome, preds)
             wterms, wissues, weffect = det.terms, det.issues, "importance"
         else:
-            wterms, wissues, weffect = _gb_importance(outcome, preds, X, y, is_class, scoring), [], "importance"
+            imp_scoring = "roc_auc" if is_class else "r2"       # a single scorer for permutation importance
+            wterms, wissues, weffect = _gb_importance(outcome, preds, X, y, is_class, imp_scoring), [], "importance"
 
         mr = ModelResult("model_selection", outcome, len(d), weffect, terms=wterms,
                          fit_stat=f"{winner} · {metric}={board[0]['score']:.3f}±{board[0]['std']:.3f} "
@@ -1542,7 +1551,9 @@ def render(r: ModelResult) -> str:
         lines.append("  LEADERBOARD (cross-validated):")
         for row in r.leaderboard:
             tag = " ←" if row.get("is_winner") else ""
-            lines.append(f"    {row['model']:20} {row['metric']}={row['score']:.3f}±{row['std']:.3f}{tag}")
+            comp = row.get("components") or {}
+            detail = ("  (" + " · ".join(f"{k} {v:.3f}" for k, v in comp.items()) + ")") if comp else ""
+            lines.append(f"    {row['model']:20} {row['metric']}={row['score']:.3f}±{row['std']:.3f}{tag}{detail}")
     for t in r.terms:
         ci = "" if np.isnan(t.ci_low) else f"  95% CI [{t.ci_low:.3f}, {t.ci_high:.3f}]"
         p = "" if np.isnan(t.p) else f"  p={t.p:.4f}" + (" *" if t.p < 0.05 else "")

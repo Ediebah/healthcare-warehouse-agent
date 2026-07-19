@@ -128,21 +128,22 @@ settled tumour markers — `worst_area` and `mean_concave_points` (size and conc
 ## 5. Model selection — the engine picks the best-fitting model
 
 The agent does not hard-code a model. `modeling.compare_models` fits several candidates, cross-validates
-each by the same metric, and keeps the winner — returning a transparent leaderboard. So an uploaded
-dataset gets the model that fits **it**, not a default.
+each by a **composite score** — the mean of ROC-AUC, PR-AUC, and balanced accuracy, so a model is
+rewarded for ranking *and* calibrated classification, not AUC alone — and keeps the winner, returning a
+transparent leaderboard. So an uploaded dataset gets the model that fits **it**, not a default.
 
 ```bash
 .venv/bin/python examples/model_selection.py
 ```
 
 On three datasets whose right model is already settled, the engine independently lands on the
-**publication's own choice**:
+**publication's own choice** (composite score, with the ROC-AUC component in brackets):
 
-| Dataset | Leaderboard (5-fold CV AUC) | Engine picks | Matches the literature |
+| Dataset | Leaderboard (5-fold CV composite) | Engine picks | Matches the literature |
 |---|---|---|---|
-| Heart disease | logistic **0.909** · forest 0.903 · boosting 0.870 | logistic regression | the classic model for this data |
-| Heart failure | **forest 0.773** · logistic 0.769 · boosting 0.722 | random forest | Chicco & Jurman (2020) compared models and chose the random forest |
-| Breast cancer | logistic **0.994** · boosting 0.993 · forest 0.992 | logistic regression | a benchmark every strong classifier clears |
+| Heart disease | logistic **0.886** (auc 0.909) · forest 0.869 · boosting 0.835 | logistic regression | the classic model for this data |
+| Heart failure | **forest 0.713** (auc 0.773) · logistic 0.700 · boosting 0.635 | random forest | Chicco & Jurman (2020) compared models and chose the random forest |
+| Breast cancer | logistic **0.984** (auc 0.994) · forest 0.982 · boosting 0.981 | logistic regression | a benchmark every strong classifier clears |
 
 The heart-failure result is the clearest: the engine reproduces the paper's *model comparison*, picking
 the random forest with serum creatinine and ejection fraction as the top features — exactly the paper's
