@@ -836,6 +836,148 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
         return ModelResult("model_selection", outcome, 0, "cross-validated skill", error=str(e))
 
 
+# ── model evaluation: decision curve analysis + failure analysis ────────────────────────────────────
+def _classification_estimator(family: str):
+    """The scikit-learn pipeline for a candidate family, matching the ones compare_models cross-validates."""
+    from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    imp = ("impute", SimpleImputer(strategy="median"))
+    if family == "random forest":
+        return Pipeline([imp, ("m", RandomForestClassifier(n_estimators=300, random_state=0, n_jobs=-1,
+                                                           min_samples_leaf=5, class_weight="balanced"))])
+    if family == "gradient boosting":
+        return Pipeline([imp, ("m", HistGradientBoostingClassifier(random_state=0))])
+    return Pipeline([imp, ("scale", StandardScaler()),
+                     ("m", LogisticRegression(max_iter=1000, class_weight="balanced"))])
+
+
+def _oof_risk(df: pd.DataFrame, outcome: str, predictors: list[str], model: str, kind: str):
+    """Shared setup for the evaluation lenses: clean, pick the model (the compare_models winner when
+    model='auto'), and return out-of-fold predicted risk. Returns (d, preds, y, p, family, issues, err)."""
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+    preds0 = [p for p in predictors if p in df.columns and p != outcome]
+    d, preds, issues = _prepare(df, [outcome], preds0, impute=False)
+    if len(d) < 40 or len(preds) < 2:
+        return None, None, None, None, None, issues, ModelResult(kind, outcome, len(d), "",
+            error="Need ≥40 rows and ≥2 predictors.")
+    if not _is_binary_outcome(d[outcome]):
+        return None, None, None, None, None, issues, ModelResult(kind, outcome, len(d), "",
+            error="This evaluation needs a binary outcome.")
+    y = _to_binary(d[outcome]).to_numpy()
+    minority = int(min(y.sum(), len(y) - y.sum()))
+    if minority < 10:
+        return None, None, None, None, None, issues, ModelResult(kind, outcome, len(d), "",
+            error=f"Outcome too rare ({minority} in the smaller class) — need ≥10 to evaluate honestly.")
+    X = pd.get_dummies(d[preds], drop_first=True)
+    family = (compare_models(df, outcome, predictors).verdict.get("winner") or "logistic regression") \
+        if model == "auto" else model
+    est = _classification_estimator(family)
+    cv = StratifiedKFold(min(5, minority), shuffle=True, random_state=0)
+    p = cross_val_predict(est, X, y, cv=cv, method="predict_proba")[:, 1]   # out-of-fold, no leakage
+    return d, preds, y, p, family, issues, None
+
+
+def decision_curve(df: pd.DataFrame, outcome: str, predictors: list[str],
+                   model: str = "auto") -> ModelResult:
+    """Decision curve analysis: net benefit across decision thresholds for the model vs treat-all and
+    treat-none (Vickers & Elkin, 2006). Net benefit weighs true positives against false positives at each
+    threshold's odds, so it answers 'does acting on this model actually help across the thresholds a
+    clinician might use?' — clinical utility, not just discrimination. Uses out-of-fold predictions.
+    """
+    try:
+        d, preds, y, p, family, issues, err = _oof_risk(df, outcome, predictors, model, "decision_curve")
+        if err is not None:
+            return err
+        n, prev = len(y), float(y.mean())
+        series, useful = [], []
+        for pt in np.round(np.arange(0.01, 0.61, 0.01), 2):
+            w = pt / (1.0 - pt)
+            pred_pos = p >= pt
+            nb_model = float(np.sum(pred_pos & (y == 1)) / n - np.sum(pred_pos & (y == 0)) / n * w)
+            nb_all = float(prev - (1.0 - prev) * w)
+            series.append({"threshold": float(pt), "nb_model": nb_model, "nb_all": nb_all, "nb_none": 0.0})
+            if nb_model > max(nb_all, 0.0) + 1e-9:
+                useful.append(float(pt))
+        rng = f"{min(useful):.0%}–{max(useful):.0%}" if useful else "no threshold"
+        mr = ModelResult("decision_curve", outcome, n, "net benefit",
+                         fit_stat=f"{family}: adds clinical net benefit over treat-all / treat-none across "
+                                  f"decision thresholds {rng}",
+                         note="Decision curve analysis (Vickers & Elkin 2006): net benefit weighs true "
+                              "positives against false positives at each threshold's odds. Out-of-fold "
+                              "predictions, so the utility is not optimistic.")
+        mr.series = series
+        mr.verdict = {"model": family, "useful_range": rng, "prevalence": round(prev, 3)}
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001
+        return ModelResult("decision_curve", outcome, 0, "net benefit", error=str(e))
+
+
+def _worst_segment(d: pd.DataFrame, preds: list[str], y, wrong) -> dict | None:
+    """The predictor subgroup (a categorical level or a numeric tertile) with the highest misclassification
+    rate, among groups with at least 15 subjects — where the model fails most."""
+    best = None
+    for col in preds:
+        s = d[col]
+        if pd.api.types.is_numeric_dtype(s) and s.nunique() > 5:
+            try:
+                grp = pd.qcut(s, 3, labels=["low", "mid", "high"], duplicates="drop").astype(str)
+            except ValueError:
+                continue
+        else:
+            grp = s.astype(str)
+        for level, mask in pd.Series(wrong).groupby(grp.to_numpy()):
+            if len(mask) >= 15:
+                rate = float(mask.mean())
+                if best is None or rate > best["error_rate"]:
+                    best = {"feature": col, "level": str(level), "error_rate": round(rate, 3),
+                            "n": int(len(mask))}
+    return best
+
+
+def failure_analysis(df: pd.DataFrame, outcome: str, predictors: list[str],
+                     model: str = "auto") -> ModelResult:
+    """Where does the best model fail? From out-of-fold predictions it reports calibration (predicted vs
+    observed risk by decile), the error split at a 0.5 cut (false positives vs false negatives), and the
+    predictor subgroup it misclassifies most — an error analysis, not just a headline metric.
+    """
+    try:
+        d, preds, y, p, family, issues, err = _oof_risk(df, outcome, predictors, model, "failure_analysis")
+        if err is not None:
+            return err
+        pred = (p >= 0.5).astype(int)
+        wrong = (pred != y).astype(int)
+        fp = int(np.sum((pred == 1) & (y == 0)))
+        fn = int(np.sum((pred == 0) & (y == 1)))
+        # calibration by risk decile: mean predicted vs observed
+        q = min(10, len(np.unique(p)))
+        cal = pd.DataFrame({"p": p, "y": y})
+        cal["bin"] = pd.qcut(cal["p"], q, duplicates="drop")
+        grouped = cal.groupby("bin", observed=True).agg(predicted=("p", "mean"), observed=("y", "mean"),
+                                                        n=("y", "size")).reset_index(drop=True)
+        series = [{"predicted": round(float(r.predicted), 3), "observed": round(float(r.observed), 3),
+                   "n": int(r.n)} for r in grouped.itertuples()]
+        max_gap = float((grouped["predicted"] - grouped["observed"]).abs().max())
+        worst = _worst_segment(d, preds, y, wrong)
+        seg = (f"worst subgroup: {worst['feature']}={worst['level']} "
+               f"(misclassified {worst['error_rate']:.0%}, n={worst['n']})") if worst else "no large subgroup"
+        mr = ModelResult("failure_analysis", outcome, len(y), "error analysis",
+                         fit_stat=f"{family}: {fp} false positives, {fn} false negatives at a 0.5 cut; "
+                                  f"max calibration gap {max_gap:.0%}; {seg}",
+                         note="Failure analysis on out-of-fold predictions: calibration by risk decile, the "
+                              "false-positive / false-negative split, and the subgroup with the most errors.")
+        mr.series = series
+        mr.verdict = {"model": family, "false_positives": fp, "false_negatives": fn,
+                      "max_calibration_gap": round(max_gap, 3), "worst_segment": worst}
+        mr.issues = issues
+        return mr
+    except Exception as e:  # noqa: BLE001
+        return ModelResult("failure_analysis", outcome, 0, "error analysis", error=str(e))
+
+
 # ── survival machine learning (random survival forest, optional scikit-survival dependency) ─────────
 _RSF_GRID = {"n_estimators": [300], "min_samples_leaf": [5, 10, 20], "max_features": ["sqrt", 0.5]}
 
@@ -1731,6 +1873,23 @@ def render(r: ModelResult) -> str:
             comp = row.get("components") or {}
             detail = ("  (" + " · ".join(f"{k} {v:.3f}" for k, v in comp.items()) + ")") if comp else ""
             lines.append(f"    {row['model']:20} {row['metric']}={row['score']:.3f}±{row['std']:.3f}{tag}{detail}")
+    if r.model_type == "decision_curve" and r.series:
+        v = r.verdict
+        lines.append(f"  CLINICALLY USEFUL ACROSS THRESHOLDS: {v.get('useful_range')} "
+                     f"(prevalence {v.get('prevalence', 0):.0%})")
+        for s in r.series:
+            if round(s["threshold"], 2) in (0.10, 0.20, 0.30, 0.50):
+                lines.append(f"    @ {s['threshold']:.0%}: net benefit {s['nb_model']:.3f} "
+                             f"(treat-all {s['nb_all']:.3f}, treat-none 0)")
+    if r.model_type == "failure_analysis":
+        v = r.verdict
+        lines.append(f"  ERRORS (0.5 cut): {v.get('false_positives')} false positives, "
+                     f"{v.get('false_negatives')} false negatives; max calibration gap "
+                     f"{v.get('max_calibration_gap', 0):.0%}")
+        w = v.get("worst_segment")
+        if w:
+            lines.append(f"  WORST SUBGROUP: {w['feature']}={w['level']} — misclassified "
+                         f"{w['error_rate']:.0%} (n={w['n']})")
     for t in r.terms:
         ci = "" if np.isnan(t.ci_low) else f"  95% CI [{t.ci_low:.3f}, {t.ci_high:.3f}]"
         p = "" if np.isnan(t.p) else f"  p={t.p:.4f}" + (" *" if t.p < 0.05 else "")

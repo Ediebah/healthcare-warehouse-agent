@@ -284,6 +284,8 @@ def _persist_trace(question: str, trace: dict | None, error: str | None) -> None
 _MODEL_HINT = re.compile(
     r"\b(predict|risk factor|feature importance|most (important|predictive)|driver|associat|correlat|"
     r"best (model|classifier|predictor)|which model|compare model|model selection|"
+    r"decision curve|net benefit|clinical utility|failure analysis|error analysis|calibrat|"
+    r"where does .{0,20}(model|it) (fail|go wrong)|worth acting on|"
     r"adjust|controlling for|confound|odds|hazard|survival|time.to|effect of|impact of|independent of|"
     r"regression|proportion of variance|forecast|projection|trend|over time|seasonal|"
     r"causal|treatment effect|uplift|a/b|ab test|experiment|variant|conversion|"
@@ -327,6 +329,13 @@ def _route(question: str, context: str) -> dict:
         "survival', 'survival ML'. Needs `duration` + binary `event` + several `predictors`. Compares a "
         "tuned Cox PH against a tuned random survival forest by concordance index and keeps the best. "
         "Prefer over 'survival' when the user asks for the BEST survival model or a machine-learning one.\n"
+        "  'decision_curve' a DECISION CURVE ANALYSIS — 'decision curve', 'net benefit', 'clinical "
+        "utility', 'is the model worth acting on'. Needs a binary `outcome` + several `predictors`. "
+        "Reports net benefit vs treat-all / treat-none across decision thresholds.\n"
+        "  'failure_analysis' an ERROR / FAILURE ANALYSIS — 'where does the model fail', 'failure "
+        "analysis', 'error analysis', 'calibration', 'which cases does it get wrong'. Needs a binary "
+        "`outcome` + several `predictors`. Reports calibration, the false-positive/negative split, and "
+        "the subgroup with the most errors.\n"
         "  'timeseries'  'forecast / trend over time' → needs `time_col`, `value_col`, `periods` (int, "
         "e.g. 12), `seasonal_periods` (12 for monthly). analytic_sql MUST aggregate to ONE ROW PER PERIOD "
         "(e.g. date_trunc('month', encounter_date) AS period, count(*) AS encounters), keep only COMPLETE "
@@ -430,6 +439,10 @@ def _fit_model(spec: dict, df) -> modeling.ModelResult:
     if mt in ("survival_ml", "rsf"):
         return modeling.compare_survival_models(df, spec["duration"], spec["event"],
                                                 spec.get("predictors", []))
+    if mt == "decision_curve":
+        return modeling.decision_curve(df, spec["outcome"], spec.get("predictors", []))
+    if mt == "failure_analysis":
+        return modeling.failure_analysis(df, spec["outcome"], spec.get("predictors", []))
     if mt == "timeseries":
         return modeling.fit_timeseries(df, spec["time_col"], spec["value_col"],
                                        int(spec.get("periods") or 12),

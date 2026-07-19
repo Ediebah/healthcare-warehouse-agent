@@ -742,3 +742,29 @@ def test_fit_rsf_and_compare_survival_models_recover_the_signal():
     assert all(row["metric"] == "composite" for row in c.leaderboard)    # C-index + td-AUC + Brier
     assert all({"harrell_c", "td_auc", "brier_skill"} <= set(row["components"]) for row in c.leaderboard)
     assert c.leaderboard[0]["score"] >= 0.55            # the winner picks up the signal
+
+
+def test_decision_curve_reports_net_benefit_across_thresholds():
+    rng = np.random.default_rng(0)
+    n = 400
+    x1, x2 = rng.normal(0, 1, n), rng.normal(0, 1, n)
+    y = (rng.random(n) < 1 / (1 + np.exp(-(1.5 * x1 - x2)))).astype(int)
+    df = pd.DataFrame({"y": y, "x1": x1, "x2": x2, "noise": rng.normal(0, 1, n)})
+    r = modeling.decision_curve(df, "y", ["x1", "x2", "noise"], model="logistic")
+    assert r.error is None and r.model_type == "decision_curve"
+    assert r.series and all({"threshold", "nb_model", "nb_all", "nb_none"} <= set(s) for s in r.series)
+    low = next(s for s in r.series if s["threshold"] == 0.20)      # a useful model beats treat-none
+    assert low["nb_model"] > 0
+
+
+def test_failure_analysis_reports_calibration_errors_and_worst_subgroup():
+    rng = np.random.default_rng(1)
+    n = 400
+    x1, x2 = rng.normal(0, 1, n), rng.normal(0, 1, n)
+    y = (rng.random(n) < 1 / (1 + np.exp(-(1.2 * x1 - x2)))).astype(int)
+    df = pd.DataFrame({"y": y, "x1": x1, "x2": x2, "g": rng.choice(["a", "b"], n)})
+    r = modeling.failure_analysis(df, "y", ["x1", "x2", "g"], model="logistic")
+    assert r.error is None and r.model_type == "failure_analysis"
+    assert r.series                                               # calibration deciles
+    assert r.verdict["false_positives"] >= 0 and r.verdict["false_negatives"] >= 0
+    assert 0.0 <= r.verdict["max_calibration_gap"] <= 1.0

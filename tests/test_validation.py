@@ -218,3 +218,18 @@ def test_survival_ml_random_forest_reaches_a_good_concordance_index():
     assert {"td_auc", "brier_skill"} <= set(rsf["components"])   # composite includes time-AUC + Brier
     top3 = [t.name for t in r.terms[:3]]                 # the winner recovers the paper's predictors
     assert "serum_creatinine" in top3 and "ejection_fraction" in top3
+
+
+# ── Model evaluation: decision curve analysis + failure analysis (heart disease) ───────────────────
+def test_decision_curve_on_heart_disease_adds_clinical_net_benefit():
+    r = modeling.decision_curve(_data(), "heart_disease", _PREDICTORS, model="logistic")
+    assert r.error is None
+    s = next(x for x in r.series if x["threshold"] == 0.20)       # at a 20% threshold the model helps
+    assert s["nb_model"] > s["nb_none"] and s["nb_model"] > s["nb_all"]
+
+
+def test_failure_analysis_on_heart_disease_is_reasonably_calibrated():
+    r = modeling.failure_analysis(_data(), "heart_disease", _PREDICTORS, model="logistic")
+    assert r.error is None
+    assert r.verdict["max_calibration_gap"] < 0.25               # logistic is well calibrated here
+    assert r.verdict["worst_segment"] is not None                # a worst subgroup is surfaced

@@ -15,6 +15,7 @@ ground truth.
 | `ml_breast_cancer.py` | random forest (machine learning) | Wisconsin Diagnostic Breast Cancer | cross-validated AUC 0.99 |
 | `model_selection.py` | **model-selection engine** (compares models, picks the best) | all three datasets above | the engine lands on each publication's own model |
 | `survival_ml.py` | **survival ML** — random survival forest vs Cox | UCI Heart Failure Clinical Records | tuned forest wins, C-index 0.75, recovers EF + creatinine |
+| `model_evaluation.py` | **decision curve + failure analysis** | UCI Cleveland heart disease | net benefit across thresholds; well-calibrated; worst subgroup surfaced |
 
 ## 1. Logistic regression — the dataset
 
@@ -173,6 +174,22 @@ time-to-event signal — while recovering the same predictors:
 Both models are hyperparameter-tuned (a grid search) before the comparison, so the contest is fair rather
 than tuned-vs-default. The forest's top predictors are ejection fraction and serum creatinine — Chicco &
 Jurman's headline, recovered by a machine-learning survival model.
+
+## 7. Model evaluation — clinical utility and where the model fails
+
+A high AUC does not make a model clinically useful or trustworthy. Two evaluation lenses go further, both
+on out-of-fold predictions so nothing is optimistic:
+
+```bash
+.venv/bin/python examples/model_evaluation.py
+```
+
+- **Decision curve analysis** (`modeling.decision_curve`, Vickers & Elkin 2006) — net benefit across
+  decision thresholds versus treating everyone or no one. On the heart-disease data the model adds net
+  benefit at every clinical threshold (e.g. at 20%: **0.375** vs treat-all 0.327).
+- **Failure analysis** (`modeling.failure_analysis`) — calibration by risk decile (predicted 0.48 →
+  observed 0.41, and so on down the table), the false-positive / false-negative split (**18 / 27** at a
+  0.5 cut), and the subgroup it misclassifies most (**typical-angina chest pain, 35% wrong**).
 
 ## Why it matters
 
