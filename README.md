@@ -20,7 +20,7 @@ does none of that. I built it as a clinical data scientist working in biostatist
 Everything runs on synthetic EHR data, so there is no PHI and the whole project is public and reproducible.
 
 Live demo: [clinical-insight-agent.streamlit.app](https://clinical-insight-agent.streamlit.app).
-CI runs on every push: `dbt build`, 108 data tests, 281 unit tests, and the guardrail eval.
+CI runs on every push: `dbt build`, 108 data tests, 284 unit tests, and the guardrail eval.
 
 ![Demo: a plain-English question is typed and run; the agent states a hypothesis, writes and executes read-only SQL, renders KPI cards and a confidence-interval chart, and the statistical guardrail flags confounding and a missing denominator before the findings.](assets/demo.gif)
 
@@ -72,7 +72,7 @@ warehouse from scratch, see [Run it locally](#run-it-locally-full-rebuild).
   warehouse is failing a critical integrity test, so a broken pipeline can't quietly feed corrupt metrics
   into an analysis.
 - Built to run in production: the SQL engine is read-only, there is a live monitoring tab, an eval suite,
-  281 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
+  284 unit tests in CI, a Dockerfile, upload-your-own-data, and a Word-report export.
 
 ---
 
@@ -98,6 +98,10 @@ compares candidate models and lands on each publication's own choice:
 - **Machine learning (random forest)** — Wisconsin Diagnostic Breast Cancer (Wolberg et al., 1995): the
   agent's random forest reaches a cross-validated **AUC of 0.99**, inside the reported benchmark band,
   with the settled tumour markers (size, concavity) on top.
+- **Survival ML (random survival forest)** — UCI Heart Failure Records: a tuned random survival forest
+  (scikit-survival) is compared against a tuned Cox model by a **survival composite** (Harrell's C-index,
+  time-dependent AUC, and Brier skill). The forest wins (**C-index 0.75**) and recovers serum creatinine
+  and ejection fraction, the same predictors as the Cox model.
 - **Model selection** — the agent doesn't hard-code a model. `compare_models` cross-validates logistic
   (or linear), random forest, and gradient boosting by a **composite score** (mean of ROC-AUC, PR-AUC,
   and balanced accuracy) and keeps the winner. On the three datasets above it lands on each publication's
@@ -296,7 +300,7 @@ and 6 named metrics with their statistical caveats is generated from the dbt art
 readable to the agent, and a deterministic token-overlap RAG retrieves over it with no embedding calls.
 
 ### Engineering
-- 281 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
+- 284 keyless `pytest` unit tests covering the guardrail statistics, SQL validation and security, retrieval,
   charts, agent helpers, modeling, condition-vocabulary grounding, data lineage, and the data-quality gate,
   plus `ruff` and a coverage gate, all run in CI.
 - GitHub Actions CI on every push: Synthea, then DuckDB, then `dbt build` (108 tests), then a catalog
@@ -341,7 +345,7 @@ cp agent/.env.example agent/.env      # then put your OPENAI_API_KEY in agent/.e
 # 4. Run the agent (CLI) + the checks
 .venv/bin/python -m agent.agent "Which conditions are most prevalent in patients 75 and older?"
 .venv/bin/python -m agent.agent "How does survival differ for heart attack patients?"   # → Myocardial infarction cohort
-.venv/bin/pytest                           # 281 keyless unit tests   (ruff check . to lint)
+.venv/bin/pytest                           # 284 keyless unit tests   (ruff check . to lint)
 .venv/bin/python -m agent.guardrail_eval   # guardrail precision/recall (no key)
 .venv/bin/python -m agent.eval_retrieval   # retrieval precision/recall/MRR (no key)
 .venv/bin/python -m agent.eval             # answer accuracy (needs a key)
@@ -393,7 +397,7 @@ overridable with `OPENAI_MODEL`). CI runs on GitHub Actions; the app is packaged
 │   ├── charts.py, llm.py, observe.py, build_catalog.py
 │   └── eval*.py, guardrail_eval.py, eval_dataset.py   the eval suite + GOLD set
 ├── warehouse/                   the dbt project (staging → core → analytics marts + tests + docs)
-├── tests/                       281 keyless pytest unit tests
+├── tests/                       284 keyless pytest unit tests
 ├── scripts/load_raw.py          Synthea CSV → DuckDB raw
 ├── .github/workflows/ci.yml     Synthea → DuckDB → dbt build → catalog → guardrail eval
 ├── Dockerfile, DEPLOY.md

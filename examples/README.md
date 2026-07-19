@@ -14,6 +14,7 @@ ground truth.
 | `bayesian_interim_futility.py` | Bayesian interim go/no-go | Chen & Chen (2019), phase II worked example | predictive probability 0.105 |
 | `ml_breast_cancer.py` | random forest (machine learning) | Wisconsin Diagnostic Breast Cancer | cross-validated AUC 0.99 |
 | `model_selection.py` | **model-selection engine** (compares models, picks the best) | all three datasets above | the engine lands on each publication's own model |
+| `survival_ml.py` | **survival ML** — random survival forest vs Cox | UCI Heart Failure Clinical Records | tuned forest wins, C-index 0.75, recovers EF + creatinine |
 
 ## 1. Logistic regression — the dataset
 
@@ -149,6 +150,29 @@ The heart-failure result is the clearest: the engine reproduces the paper's *mod
 the random forest with serum creatinine and ejection fraction as the top features — exactly the paper's
 headline. This is the same `compare_models` call the app makes when you upload data and ask for the best
 predictor.
+
+## 6. Survival ML — a random survival forest, judged by a survival composite
+
+Survival gets the same treatment. `modeling.compare_survival_models` tunes a Cox proportional-hazards
+model and a random survival forest (scikit-survival), then ranks them by a **survival composite** — the
+mean of Harrell's C-index, time-dependent AUC, and a Brier skill score (1 − integrated Brier), so ranking,
+time-varying discrimination, and calibration all count.
+
+```bash
+.venv/bin/python examples/survival_ml.py       # needs: pip install scikit-survival
+```
+
+On the heart-failure cohort the tuned forest edges Cox — a non-linear model captures a little more of the
+time-to-event signal — while recovering the same predictors:
+
+| Model | Composite | Harrell C | time-dep. AUC | Brier skill |
+|---|---|---|---|---|
+| **random survival forest** | **0.782** | 0.746 | 0.739 | 0.862 |
+| Cox proportional hazards | 0.762 | 0.713 | 0.714 | 0.860 |
+
+Both models are hyperparameter-tuned (a grid search) before the comparison, so the contest is fair rather
+than tuned-vs-default. The forest's top predictors are ejection fraction and serum creatinine — Chicco &
+Jurman's headline, recovered by a machine-learning survival model.
 
 ## Why it matters
 

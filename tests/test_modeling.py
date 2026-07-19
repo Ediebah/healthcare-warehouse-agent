@@ -717,3 +717,28 @@ def test_compare_models_rejects_too_little_data():
     df = _logit_data(n=20)
     r = modeling.compare_models(df, "y", ["x", "g"])
     assert r.error is not None
+
+
+def test_fit_rsf_and_compare_survival_models_recover_the_signal():
+    pytest.importorskip("sksurv")
+    rng = np.random.default_rng(0)
+    n = 300
+    x, noise = rng.normal(0, 1, n), rng.normal(0, 1, n)
+    base = rng.exponential(scale=np.exp(-0.8 * x))       # higher x -> shorter survival (real hazard driver)
+    cens = rng.exponential(scale=1.5, size=n)
+    time = np.minimum(base, cens) + 0.01
+    event = (base <= cens).astype(int)
+    df = pd.DataFrame({"time": time, "event": event, "x": x, "noise": noise})
+
+    r = modeling.fit_rsf(df, "time", "event", ["x", "noise"])
+    assert r.error is None and r.model_type == "rsf"
+    assert "C-index=" in r.fit_stat and "tuned" in r.fit_stat
+    assert r.terms[0].name == "x"                        # the real predictor ranks top
+
+    c = modeling.compare_survival_models(df, "time", "event", ["x", "noise"])
+    assert c.error is None and c.model_type == "model_selection"
+    assert {row["model"] for row in c.leaderboard} == {"Cox proportional hazards",
+                                                       "random survival forest"}
+    assert all(row["metric"] == "composite" for row in c.leaderboard)    # C-index + td-AUC + Brier
+    assert all({"harrell_c", "td_auc", "brier_skill"} <= set(row["components"]) for row in c.leaderboard)
+    assert c.leaderboard[0]["score"] >= 0.55            # the winner picks up the signal

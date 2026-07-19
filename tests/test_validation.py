@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from agent import bayes, modeling
 
@@ -205,3 +206,15 @@ def test_model_selection_breast_cancer_every_candidate_is_strong():
     assert r.error is None
     assert all(row["components"]["roc_auc"] >= 0.96 for row in r.leaderboard)   # benchmark all clear
     assert r.leaderboard[0]["components"]["roc_auc"] >= 0.98                     # winner clears 0.98
+
+
+# ── Survival ML: random survival forest vs Cox by concordance index (Chicco & Jurman 2020) ─────────
+def test_survival_ml_random_forest_reaches_a_good_concordance_index():
+    pytest.importorskip("sksurv")   # scikit-survival is an optional dependency
+    r = modeling.compare_survival_models(_hf(), "time", "DEATH_EVENT", _HF_PREDICTORS_FULL)
+    assert r.error is None
+    rsf = next(row for row in r.leaderboard if row["model"] == "random survival forest")
+    assert rsf["components"]["harrell_c"] >= 0.70        # the tuned forest reaches a strong C-index
+    assert {"td_auc", "brier_skill"} <= set(rsf["components"])   # composite includes time-AUC + Brier
+    top3 = [t.name for t in r.terms[:3]]                 # the winner recovers the paper's predictors
+    assert "serum_creatinine" in top3 and "ejection_fraction" in top3

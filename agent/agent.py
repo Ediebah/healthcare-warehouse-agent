@@ -322,6 +322,11 @@ def _route(question: str, context: str) -> dict:
         "forest, and gradient boosting and keeps the winner, returning a leaderboard. Needs `outcome` "
         "(binary or continuous) + several `predictors`. Prefer over 'forest' when the user wants a "
         "PREDICTIVE MODEL or the BEST/right model, not only feature importance.\n"
+        "  'survival_ml' a MACHINE-LEARNING survival model or a survival-model comparison — 'random "
+        "survival forest', 'best survival model', 'which survival model fits best', 'non-linear "
+        "survival', 'survival ML'. Needs `duration` + binary `event` + several `predictors`. Compares a "
+        "tuned Cox PH against a tuned random survival forest by concordance index and keeps the best. "
+        "Prefer over 'survival' when the user asks for the BEST survival model or a machine-learning one.\n"
         "  'timeseries'  'forecast / trend over time' → needs `time_col`, `value_col`, `periods` (int, "
         "e.g. 12), `seasonal_periods` (12 for monthly). analytic_sql MUST aggregate to ONE ROW PER PERIOD "
         "(e.g. date_trunc('month', encounter_date) AS period, count(*) AS encounters), keep only COMPLETE "
@@ -422,6 +427,9 @@ def _fit_model(spec: dict, df) -> modeling.ModelResult:
         return modeling.fit_forest(df, spec["outcome"], spec.get("predictors", []))
     if mt in ("best_model", "compare", "compare_models"):
         return modeling.compare_models(df, spec["outcome"], spec.get("predictors", []))
+    if mt in ("survival_ml", "rsf"):
+        return modeling.compare_survival_models(df, spec["duration"], spec["event"],
+                                                spec.get("predictors", []))
     if mt == "timeseries":
         return modeling.fit_timeseries(df, spec["time_col"], spec["value_col"],
                                        int(spec.get("periods") or 12),

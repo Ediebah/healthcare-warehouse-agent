@@ -836,6 +836,183 @@ def compare_models(df: pd.DataFrame, outcome: str, predictors: list[str],
         return ModelResult("model_selection", outcome, 0, "cross-validated skill", error=str(e))
 
 
+# ── survival machine learning (random survival forest, optional scikit-survival dependency) ─────────
+_RSF_GRID = {"n_estimators": [300], "min_samples_leaf": [5, 10, 20], "max_features": ["sqrt", 0.5]}
+
+
+def _importance_terms(means: "pd.Series", preds: list[str]) -> list:
+    """Roll one-hot importance columns back up to their source predictor, as sorted Terms."""
+    terms = []
+    for p in preds:
+        cols = [c for c in means.index if c == p or c.startswith(f"{p}_")]
+        terms.append(Term(p, float(means[cols].sum()) if cols else 0.0,
+                          float("nan"), float("nan"), float("nan")))
+    terms.sort(key=lambda t: t.estimate, reverse=True)
+    return terms
+
+
+def _survival_xy(df: pd.DataFrame, duration: str, event: str, predictors: list[str], kind: str):
+    """Shared prep for the survival ML models: clean, build the design matrix X and the structured
+    (event, time) target y. Returns (d, preds, issues, X, y, err) where err is a populated error
+    ModelResult when the data can't support a survival model, else None."""
+    from sksurv.util import Surv
+    preds0 = [p for p in predictors if p in df.columns and p not in (duration, event)]
+    d, preds, issues = _prepare(df, [duration, event], preds0, impute=True)
+    if len(d) < 40 or len(preds) < 2:
+        return d, preds, issues, None, None, ModelResult(kind, event, len(d), "concordance index",
+            error="Need ≥40 rows and ≥2 predictors for a survival model.")
+    ev = _to_binary(d[event]).astype(bool)
+    t = pd.to_numeric(d[duration], errors="coerce")
+    ok = t.notna() & (t > 0)
+    d, ev, t = d[ok], ev[ok], t[ok]
+    if int(ev.sum()) < 10:
+        return d, preds, issues, None, None, ModelResult(kind, event, len(d), "concordance index",
+            error=f"Too few events ({int(ev.sum())}) to fit a survival model — need ≥10.")
+    X = pd.get_dummies(d[preds], drop_first=True).astype(float)
+    y = Surv.from_arrays(event=ev.values, time=t.values)
+    return d, preds, issues, X, y, None
+
+
+def _survival_composite_cv(make, params: dict, X, y, cv):
+    """Cross-validated survival composite for a tuned estimator: the mean of Harrell's concordance,
+    time-dependent (cumulative/dynamic) AUC, and a Brier skill score (1 - integrated Brier score) —
+    combining ranking, time-varying discrimination, and calibration into one number (the survival analog
+    of the classification composite). Returns (component means dict, std of the per-fold composite)."""
+    from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc, integrated_brier_score
+    rows = []
+    for tr, te in cv.split(X):
+        est = make(**params).fit(X[tr], y[tr])
+        risk = est.predict(X[te])
+        harrell = concordance_index_censored(y["event"][te], y["time"][te], risk)[0]
+        # a time grid strictly inside the test event span AND the train follow-up, otherwise the survival
+        # step functions are undefined past the last training time and the time-based metrics blow up
+        te_events = y["time"][te][y["event"][te]]
+        lo, hi = np.percentile(te_events, [10, 90])
+        hi = min(hi, float(y["time"][tr].max()) * 0.999)
+        try:
+            times = np.linspace(lo, hi, 6)
+            td_auc = cumulative_dynamic_auc(y[tr], y[te], risk, times)[1]
+            surv = np.asarray([[fn(t) for t in times] for fn in est.predict_survival_function(X[te])])
+            brier_skill = 1.0 - integrated_brier_score(y[tr], y[te], surv, times)
+        except Exception:  # noqa: BLE001
+            td_auc, brier_skill = np.nan, np.nan
+        rows.append((harrell, td_auc, brier_skill))
+    arr = np.asarray(rows, dtype=float)
+    means = {"harrell_c": float(np.nanmean(arr[:, 0])), "td_auc": float(np.nanmean(arr[:, 1])),
+             "brier_skill": float(np.nanmean(arr[:, 2]))}
+    return means, float(np.nanstd(np.nanmean(arr, axis=1)))
+
+
+def fit_rsf(df: pd.DataFrame, duration: str, event: str, predictors: list[str]) -> ModelResult:
+    """Random survival forest → tuned, cross-validated concordance index + permutation importances.
+
+    The machine-learning counterpart to fit_cox: a non-linear survival model that makes no
+    proportional-hazards assumption. Hyperparameters are chosen by a small grid search (not left at the
+    library defaults), so the reported skill is the tuned model's. Needs the optional scikit-survival
+    package; returns a clear error if it is not installed.
+    """
+    try:
+        from sklearn.inspection import permutation_importance
+        from sklearn.model_selection import GridSearchCV, KFold, train_test_split
+        from sksurv.ensemble import RandomSurvivalForest
+        d, preds, issues, X, y, err = _survival_xy(df, duration, event, predictors, "rsf")
+        if err is not None:
+            return err
+        cv = KFold(5, shuffle=True, random_state=0)
+        search = GridSearchCV(RandomSurvivalForest(random_state=0, n_jobs=-1), _RSF_GRID, cv=cv).fit(X, y)
+        best, p = search.best_estimator_, search.best_params_
+        Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0)   # held-out importance
+        best.fit(Xtr, ytr)
+        pi = permutation_importance(best, Xte, yte, n_repeats=10, random_state=0)
+        terms = _importance_terms(pd.Series(pi.importances_mean, index=X.columns), preds)
+        mr = ModelResult("rsf", event, len(d), "importance", terms,
+                         fit_stat=f"C-index={search.best_score_:.3f} (5-fold CV) · tuned: "
+                                  f"leaf={p['min_samples_leaf']}, max_features={p['max_features']}",
+                         note="Random survival forest, hyperparameters grid-searched by cross-validated "
+                              "concordance index. Non-linear survival ML, no proportional-hazards assumption; "
+                              "permutation importance measured on a held-out split. Predictive, not causal.")
+        mr.issues = issues
+        return mr
+    except ImportError:
+        return ModelResult("rsf", event, 0, "importance",
+                           error="Random survival forest needs the optional 'scikit-survival' package "
+                                 "(pip install scikit-survival).")
+    except Exception as e:  # noqa: BLE001
+        return ModelResult("rsf", event, 0, "importance", error=str(e))
+
+
+def compare_survival_models(df: pd.DataFrame, duration: str, event: str,
+                            predictors: list[str]) -> ModelResult:
+    """Compare Cox PH vs a random survival forest and keep the best-fitting one.
+
+    Each candidate is hyperparameter-tuned by a grid search and ranked by its tuned, cross-validated
+    concordance index (the survival analog of compare_models). Cox's ridge penalty and the forest's tree
+    settings are both searched, so the contest is fair rather than tuned-vs-default. Needs scikit-survival.
+    """
+    try:
+        from sklearn.inspection import permutation_importance
+        from sklearn.model_selection import GridSearchCV, KFold, train_test_split
+        from sksurv.ensemble import RandomSurvivalForest
+        from sksurv.linear_model import CoxPHSurvivalAnalysis
+        d, preds, issues, X, y, err = _survival_xy(df, duration, event, predictors, "model_selection")
+        if err is not None:
+            return err
+        cv = KFold(5, shuffle=True, random_state=0)
+        Xv = X.values
+        makers = {
+            "Cox proportional hazards": (lambda **kw: CoxPHSurvivalAnalysis(**kw),
+                                         {"alpha": [1e-4, 1e-2, 1.0, 10.0]}),
+            "random survival forest": (lambda **kw: RandomSurvivalForest(random_state=0, n_jobs=-1, **kw),
+                                       _RSF_GRID),
+        }
+        board, tuned = [], {}
+        for name, (make, grid) in makers.items():
+            best_params = GridSearchCV(make(), grid, cv=cv).fit(Xv, y).best_params_   # tune by C-index
+            tuned[name] = (make, best_params)
+            comps, std = _survival_composite_cv(make, best_params, Xv, y, cv)          # rank by composite
+            board.append({"model": name, "metric": "composite", "score": float(np.mean(list(comps.values()))),
+                          "std": std, "components": comps})
+        board.sort(key=lambda r: (r["score"], r["model"]), reverse=True)
+        for i, row in enumerate(board):
+            row["is_winner"] = (i == 0)
+        winner = board[0]["model"]
+
+        if winner == "Cox proportional hazards":
+            wterms, weffect = fit_cox(df, duration, event, preds).terms, "hazard ratio"
+        else:                                              # reuse the tuned forest — no re-search
+            make, params = tuned["random survival forest"]
+            best = make(**params)
+            Xtr, Xte, ytr, yte = train_test_split(Xv, y, test_size=0.3, random_state=0)
+            best.fit(Xtr, ytr)
+            pi = permutation_importance(best, Xte, yte, n_repeats=10, random_state=0)
+            wterms = _importance_terms(pd.Series(pi.importances_mean, index=X.columns), preds)
+            weffect = "importance"
+
+        mr = ModelResult("model_selection", event, len(d), weffect, terms=wterms,
+                         fit_stat=f"{winner} · composite={board[0]['score']:.3f}±{board[0]['std']:.3f} "
+                                  f"(5-fold CV)",
+                         note="Survival model selection: Cox PH and a random survival forest, each "
+                              "hyperparameter-tuned by cross-validated concordance index, then ranked by a "
+                              "composite of Harrell's C-index, time-dependent AUC, and a Brier skill score "
+                              "(1 - integrated Brier). The winner's own output is shown.")
+        mr.leaderboard = board
+        runner = board[1] if len(board) > 1 else None
+        mr.verdict = {"winner": winner, "metric": "composite", "score": round(board[0]["score"], 4),
+                      "effect": weffect,
+                      "reason": f"{winner} had the best 5-fold cross-validated survival composite "
+                                f"({board[0]['score']:.3f})"
+                                + (f", ahead of {runner['model']} ({runner['score']:.3f})." if runner else ".")}
+        mr.issues = issues
+        mr.robustness = {"task": "survival"}
+        return mr
+    except ImportError:
+        return ModelResult("model_selection", event, 0, "concordance index",
+                           error="Survival model comparison needs the optional 'scikit-survival' package "
+                                 "(pip install scikit-survival).")
+    except Exception as e:  # noqa: BLE001
+        return ModelResult("model_selection", event, 0, "concordance index", error=str(e))
+
+
 def fit_timeseries(df: pd.DataFrame, time_col: str, value_col: str,
                    periods: int = 12, seasonal_periods: int = 12) -> ModelResult:
     """Holt-Winters exponential smoothing → forecast `periods` ahead with an approximate 95% band."""
